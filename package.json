@@ -1,0 +1,31 @@
+{
+  "name": "dinou-app",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": "dinou dev",
+    "build": "dinou build",
+    "start": "dinou start",
+    "dev:rollup": "dinou dev:rollup",
+    "build:rollup": "dinou build:rollup",
+    "start:rollup": "dinou start:rollup",
+    "dev:webpack": "dinou dev:webpack",
+    "build:webpack": "dinou build:webpack",
+    "start:webpack": "dinou start:webpack",
+    "eject": "dinou eject"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "dinou": "^6.0.1",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0"
+  }
+}

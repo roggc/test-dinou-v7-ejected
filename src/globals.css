@@ -1,0 +1,84 @@
+@import "tailwindcss";
+
+/*
+* edit or delete content below
+*/
+
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
+}
+
+@keyframes spin-slow {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@utility animate-spin-slow {
+  animation: spin-slow 10s linear infinite;
+}
+
+::view-transition-group(feature-card-transition),
+::view-transition-group(workbench-active-pill),
+::view-transition-group(nav-active-pill),
+::view-transition-group(canvas-color-pill),
+::view-transition-group(proposal4-tab-pill),
+::view-transition-group(proposal5-tab-pill),
+::view-transition-group(p4-color-pill),
+::view-transition-group(p4-duration-pill) {
+  animation-duration: 0.28s;
+  animation-timing-function: cubic-bezier(0.25, 1, 0.5, 1);
+}
+
+:root {
+  view-transition-name: none;
+}
+
+::view-transition-old(feature-card-transition),
+::view-transition-new(feature-card-transition) {
+  animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+::view-transition-group(use-case-stage) {
+  animation-duration: 0.38s;
+  animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+::view-transition-old(use-case-stage) {
+  animation: 0.38s cubic-bezier(0.16, 1, 0.3, 1) both use-case-exit;
+}
+
+::view-transition-new(use-case-stage) {
+  animation: 0.38s cubic-bezier(0.16, 1, 0.3, 1) both use-case-enter;
+}
+
+@keyframes use-case-exit {
+  0% {
+    opacity: 1;
+    transform: translateY(0px) scale(1);
+    filter: blur(0px);
+  }
+
+  100% {
+    opacity: 0;
+    transform: translateY(-20px) scale(0.98);
+    filter: blur(6px);
+  }
+}
+
+@keyframes use-case-enter {
+  0% {
+    opacity: 0;
+    transform: translateY(20px) scale(0.98);
+    filter: blur(6px);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translateY(0px) scale(1);
+    filter: blur(0px);
+  }
+}
