@@ -3,8 +3,7 @@
   publish = ".dinou/dist3"
 
 [build.environment]
-  NODE_VERSION = "20"
-  NODE_ENV = "production"
+  NODE_VERSION = "22"
 
 [environment]
   NODE_ENV = "production"

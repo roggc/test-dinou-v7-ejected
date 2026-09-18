@@ -167,6 +167,21 @@ function getImportMapHtml() {
         specifier = specifier.slice(0, hashIdx);
       }
       imports[specifier] = val.id;
+
+      const srcIdx = key.indexOf("/src/");
+      if (srcIdx !== -1) {
+        const srcRel = "src/" + key.slice(srcIdx + 5).split("#")[0];
+        imports[srcRel] = val.id;
+        imports["/" + srcRel] = val.id;
+        imports["./" + srcRel] = val.id;
+      }
+      const dinouIdx = key.indexOf("/dinou/");
+      if (dinouIdx !== -1) {
+        const dinouRel = "dinou/" + key.slice(dinouIdx + 7).split("#")[0];
+        imports[dinouRel] = val.id;
+        imports["/" + dinouRel] = val.id;
+        imports["./" + dinouRel] = val.id;
+      }
     }
 
     return `<script type="importmap">{"imports":${JSON.stringify(imports)}}</script><script>(function(){const map=document.querySelector('script[type="importmap"]');if(map)map.remove();if(document.currentScript)document.currentScript.remove();})();</script>`;
