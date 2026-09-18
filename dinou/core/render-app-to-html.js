@@ -185,6 +185,7 @@ function renderAppToHtml(
     {
       execArgv: childExecArgv,
       stdio: ["ignore", "pipe", "pipe", "ipc", "pipe"], // fd 4 is the RSC stream pipe
+      env: { ...process.env, DINOU_PROCESS: "ssr-html" },
     },
   );
 

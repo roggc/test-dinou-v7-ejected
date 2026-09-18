@@ -1,13 +1,27 @@
 require("dotenv/config");
+const { pathToFileURL } = require("url");
+const path = require("path");
+
+// Register ESM loader programmatically so --import flag is not required
+const { register } = require("node:module");
+if (typeof register === "function") {
+  try {
+    const loaderPath = path.resolve(__dirname, "./babel-esm-loader.js");
+    register(pathToFileURL(loaderPath).href, pathToFileURL("./"));
+  } catch (e) {
+    // Loader might already be registered
+  }
+}
+
 const Module = require("module");
 const originalResolveFilename = Module._resolveFilename;
 const isWebpack = process.env.DINOU_BUILD_TOOL === "webpack";
 globalThis.__dinou_require__ = require;
-const path = require("path");
 
 let reactServerPath, reactDomServerPath, reactJsxRuntimePath, reactJsxDevRuntimePath;
+let roggcServerNodePath, webpackServerNodePath;
 
-if (!isWebpack) {
+try {
   const reactPkgJson = require.resolve("react/package.json");
   reactServerPath = path.join(path.dirname(reactPkgJson), "react.react-server.js");
   reactJsxRuntimePath = path.join(path.dirname(reactPkgJson), "jsx-runtime.react-server.js");
@@ -15,19 +29,31 @@ if (!isWebpack) {
 
   const reactDomPkgJson = require.resolve("react-dom/package.json");
   reactDomServerPath = path.join(path.dirname(reactDomPkgJson), "react-dom.react-server.js");
-}
+} catch (e) {}
+
+try {
+  const roggcPkgJson = require.resolve("@roggc/react-server-dom-esm/package.json");
+  roggcServerNodePath = path.join(path.dirname(roggcPkgJson), "server.node.js");
+} catch (e) {}
+
+try {
+  const webpackPkgJson = require.resolve("react-server-dom-webpack/package.json");
+  webpackServerNodePath = path.join(path.dirname(webpackPkgJson), "server.node.js");
+} catch (e) {}
 
 Module._resolveFilename = function (request, parent, isMain, options) {
-  if (!isWebpack) {
-    if (request === "react") {
-      return reactServerPath;
-    } else if (request === "react-dom") {
-      return reactDomServerPath;
-    } else if (request === "react/jsx-runtime") {
-      return reactJsxRuntimePath;
-    } else if (request === "react/jsx-dev-runtime") {
-      return reactJsxDevRuntimePath;
-    }
+  if (request === "react") {
+    return reactServerPath;
+  } else if (request === "react-dom") {
+    return reactDomServerPath;
+  } else if (request === "react/jsx-runtime") {
+    return reactJsxRuntimePath;
+  } else if (request === "react/jsx-dev-runtime") {
+    return reactJsxDevRuntimePath;
+  } else if (request === "@roggc/react-server-dom-esm/server" && roggcServerNodePath) {
+    return roggcServerNodePath;
+  } else if (request === "react-server-dom-webpack/server" && webpackServerNodePath) {
+    return webpackServerNodePath;
   }
   return originalResolveFilename.call(this, request, parent, isMain, options);
 };
@@ -276,11 +302,41 @@ app.use(express.json());
 app.use(express.static(path.resolve(process.cwd(), outputFolder)));
 
 const { nodeToWebRequest, sendWebResponseToNode } = require("./http-adapter.js");
-const { handleRequest } = require("./handler.js");
+
+let handleRequestFn = null;
+
+function extractHandleRequest(mod) {
+  if (typeof mod?.handleRequest === "function") return mod.handleRequest;
+  if (typeof mod?.default === "function") return mod.default;
+  if (typeof mod?.default?.handleRequest === "function") return mod.default.handleRequest;
+  if (typeof mod?.default?.default === "function") return mod.default.default;
+  return typeof mod === "function" ? mod : null;
+}
+
+async function getHandleRequest() {
+  if (handleRequestFn) return handleRequestFn;
+  const bundledPath = path.resolve(process.cwd(), ".dinou/dist3/server/handler.js");
+  if (!isDevelopment && existsSync(bundledPath)) {
+    try {
+      const bundled = await import(pathToFileURL(bundledPath).href);
+      handleRequestFn = extractHandleRequest(bundled);
+      if (typeof handleRequestFn === "function") {
+        console.log("⚡ [Dinou Server] Using pre-bundled server handler from .dinou/dist3/server/handler.js");
+        return handleRequestFn;
+      }
+    } catch (e) {
+      console.warn("⚠️ [Dinou Server] Could not load bundled handler, falling back to source handler:", e);
+    }
+  }
+  const source = require("./handler.js");
+  handleRequestFn = extractHandleRequest(source);
+  return handleRequestFn;
+}
 
 // 2. Dynamic requests: delegated to the universal WHATWG handler
 app.use(async (req, res, next) => {
   try {
+    const handleRequest = await getHandleRequest();
     const webRequest = nodeToWebRequest(req);
     const webResponse = await handleRequest(webRequest);
     await sendWebResponseToNode(webResponse, res);
@@ -299,6 +355,7 @@ const http = require("http");
 (async () => {
   try {
     console.log("👉 [Startup] Initializing HTTP Server...");
+    await getHandleRequest();
     const server = http.createServer(app);
 
     // 2. ERROR HANDLING (Anti-Zombies)
