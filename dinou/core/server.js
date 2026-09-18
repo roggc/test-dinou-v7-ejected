@@ -137,7 +137,7 @@ if (isDevelopment) {
 
     async function loadManifestWithRetry({
       manifestPath,
-      maxRetries = 10,
+      maxRetries = 25,
       delayMs = 100,
     } = {}) {
       let attempts = 0;
@@ -234,12 +234,18 @@ if (isDevelopment) {
       currentManifest = newManifest;
     }
 
+    function isManifestFile(targetPath) {
+      if (!targetPath) return false;
+      return path.resolve(targetPath).toLowerCase() === path.resolve(manifestPath).toLowerCase();
+    }
+
     async function onManifestChange(chokidarPath, stats, delayMs = 100) {
-      if (isWebpack && chokidarPath !== manifestPath) return;
+      if (!isManifestFile(chokidarPath)) return;
       if (Object.keys(currentManifest).length === 0 && isInitial) {
         try {
           currentManifest = await loadManifestWithRetry({
             manifestPath,
+            maxRetries: 25,
             delayMs,
           });
           // console.log("Loaded initial manifest for HMR.", currentManifest);
@@ -268,9 +274,11 @@ if (isDevelopment) {
 
     manifestWatcher.on("add", onManifestChange);
     manifestWatcher.on("unlinkDir", startManifestWatcher);
-    manifestWatcher.on("unlink", () => {
-      isInitial = true;
-      currentManifest = {};
+    manifestWatcher.on("unlink", (unlinkedPath) => {
+      if (isManifestFile(unlinkedPath)) {
+        isInitial = true;
+        currentManifest = {};
+      }
     });
     manifestWatcher.on("change", onManifestChange);
   }
