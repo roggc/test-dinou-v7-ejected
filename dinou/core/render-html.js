@@ -15,6 +15,7 @@ global.__webpack_chunk_load__ = function (chunkId) {
 require("./register-paths");
 const babelRegister = require("@babel/register");
 babelRegister({
+  cache: false,
   ignore: [/node_modules[\\/](?!dinou)/],
   presets: [
     ["@babel/preset-react", { runtime: "automatic" }],

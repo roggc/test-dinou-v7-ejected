@@ -10,6 +10,8 @@
   node_bundler = "none"
   included_files = [
     "package.json",
+    "tsconfig.json",
+    "dinou.config.*",
     "src/**",
     "dinou/**",
     ".dinou/**",

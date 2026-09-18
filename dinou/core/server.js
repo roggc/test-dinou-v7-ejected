@@ -67,6 +67,7 @@ const addHook = require("./asset-require-hook.js");
 const { extensions } = require("./asset-extensions.js");
 const babelRegister = require("@babel/register");
 babelRegister({
+  cache: false,
   ignore: [/node_modules[\\/](?!dinou)/],
   presets: [
     ["@babel/preset-react", { runtime: "automatic" }],
