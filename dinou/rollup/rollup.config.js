@@ -31,7 +31,7 @@ console.log(
 
 module.exports = async function () {
   const del = (await import("rollup-plugin-delete")).default;
-  return {
+  const clientConfig = {
     input: isDevelopment
       ? {
         runtime: path.resolve(
@@ -194,4 +194,55 @@ module.exports = async function () {
       warn(warning);
     },
   };
+
+  if (isDevelopment) {
+    return clientConfig;
+  }
+
+  const serverConfig = {
+    input: {
+      handler: path.resolve(__dirname, "../core/handler.js"),
+      netlify: path.resolve(__dirname, "../adapters/netlify.js"),
+    },
+    output: {
+      dir: path.resolve(outputDirectory, "server"),
+      format: "esm",
+      entryFileNames: "[name].js",
+      chunkFileNames: "[name]-[hash].js",
+      sourcemap: true,
+      banner: "import { createRequire as ___createRequire } from 'node:module'; import { fileURLToPath as ___fileURLToPath } from 'node:url'; import ___path from 'node:path'; const require = ___createRequire(import.meta.url); const __filename = ___fileURLToPath(import.meta.url); const __dirname = ___path.dirname(__filename);",
+    },
+    external: [
+      "express",
+      "chokidar",
+      "dotenv",
+      "fsevents",
+      "@swc/core",
+      "@babel/core",
+      "esbuild",
+    ],
+    plugins: [
+      replace({
+        preventAssignment: true,
+        "process.env.NODE_ENV": JSON.stringify("production"),
+      }),
+      json(),
+      resolve({
+        exportConditions: ["react-server", "node", "import"],
+        preferBuiltins: true,
+        browser: false,
+      }),
+      commonjs({
+        ignoreDynamicRequires: true,
+      }),
+    ],
+    onwarn(warning, warn) {
+      if (warning.code === "CIRCULAR_DEPENDENCY" || warning.code === "EVAL") {
+        return;
+      }
+      warn(warning);
+    },
+  };
+
+  return [clientConfig, serverConfig];
 };
