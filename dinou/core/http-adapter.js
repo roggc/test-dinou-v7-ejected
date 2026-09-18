@@ -93,6 +93,15 @@ async function sendWebResponseToNode(webResponse, res) {
 
   if (typeof webResponse.body.getReader === "function") {
     const nodeStream = Readable.fromWeb(webResponse.body);
+    nodeStream.on("error", (err) => {
+      console.error("[http-adapter] Error in response stream:", err);
+      if (!res.headersSent) {
+        res.statusCode = 500;
+        res.end("Internal Server Error");
+      } else {
+        res.destroy(err);
+      }
+    });
     nodeStream.pipe(res);
   } else {
     const arrayBuffer = await webResponse.arrayBuffer();

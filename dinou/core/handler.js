@@ -644,23 +644,55 @@ async function handleRequest(request) {
   }
 
   // Dynamic SSR Render
-  const context = createRequestContext(simReq, bridge);
-  await requestStorage.run(context, async () => {
-    try {
-      await processLimiter.run(() => {
-        return new Promise((resolve, reject) => {
-          renderAppToHtml(reqPath, queryObj, bridge, () => {
+  const contextForChild = {
+    req: {
+      query: { ...queryObj },
+      cookies: { ...cookiesObj },
+      headers: { ...headersObj },
+      path: pathname,
+      method: request.method,
+    },
+  };
+
+  const isDynamicSSR = true;
+  const capturedStatus = null;
+  const isPathBlocked = false;
+
+  processLimiter
+    .run(async () => {
+      try {
+        const appHtmlStream = renderAppToHtml(
+          reqPath,
+          JSON.stringify(queryObj),
+          contextForChild,
+          bridge,
+          capturedStatus,
+          isDynamicSSR,
+          isPathBlocked,
+        );
+
+        bridge.setHeader("Content-Type", "text/html; charset=utf-8");
+        appHtmlStream.pipe(bridge);
+
+        await new Promise((resolve) => {
+          appHtmlStream.on("end", resolve);
+          appHtmlStream.on("error", (error) => {
+            console.error("[Dinou] Stream error:", error);
+            if (!bridge.headersSent) bridge.status(500).send("Internal Server Error");
             resolve();
-          }, context, false);
+          });
         });
-      });
-    } catch (err) {
-      console.error("[Dinou] Error in dynamic SSR:", err);
-      if (!bridge.headersSent) {
-        bridge.status(500).send("Internal Server Error");
+      } catch (err) {
+        console.error("[Dinou] Error in dynamic SSR:", err);
+        if (!bridge.headersSent) {
+          bridge.status(500).send("Internal Server Error");
+        }
       }
-    }
-  });
+    })
+    .catch((err) => {
+      console.error("[Dinou] Error in limited SSR:", err);
+      if (!bridge.headersSent) bridge.status(500).send("Server Busy or Error");
+    });
 
   return bridge.toResponse();
 }
