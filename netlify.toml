@@ -1,0 +1,14 @@
+[build]
+  command = "npm run build"
+  publish = ".dinou/dist3"
+
+[build.environment]
+  NODE_VERSION = "20"
+
+[functions]
+  directory = ".dinou/dist3/server"
+  included_files = [
+    "src/**",
+    "dinou/**",
+    ".dinou/**"
+  ]

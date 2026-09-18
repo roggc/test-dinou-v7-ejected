@@ -43,10 +43,12 @@ function toFileUrl(p) {
   return url.pathToFileURL(p).href;
 }
 
+const { dinouCoreDir } = require("./dinou-paths.js");
+
 const registerLoaderPath = toFileUrl(
-  path.join(__dirname, "register-loader.mjs"),
+  path.join(dinouCoreDir, "register-loader.mjs"),
 );
-const renderHtmlPath = path.resolve(__dirname, "render-html.js");
+const renderHtmlPath = path.join(dinouCoreDir, "render-html.js");
 
 const ESSENTIAL_NODE_ARGS = [];
 const loaderArg = `--import=${registerLoaderPath}`;
