@@ -4,6 +4,10 @@
 
 [build.environment]
   NODE_VERSION = "20"
+  NODE_ENV = "production"
+
+[environment]
+  NODE_ENV = "production"
 
 [functions]
   directory = ".dinou/dist3/server"

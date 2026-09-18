@@ -1,6 +1,8 @@
 // dinou/adapters/netlify.js
 // Netlify Functions v2 Adapter for Dinou.
 // Automatically routes all requests to Dinou's universal Web Standards handler.
+process.env.NODE_ENV = "production";
+
 import { register } from "node:module";
 import { pathToFileURL } from "node:url";
 import path from "node:path";
