@@ -81,6 +81,56 @@ function getClientManifest() {
   return cachedClientManifest || {};
 }
 
+// Server functions manifest handling
+const serverFunctionsManifestPath = path.resolve(
+  process.cwd(),
+  isWebpack
+    ? `${outputFolder}/server-functions-manifest.json`
+    : `.dinou/server_functions_manifest/server-functions-manifest.json`,
+);
+
+let cachedServerFunctionsManifest = null;
+if (!isDevelopment && existsSync(serverFunctionsManifestPath)) {
+  try {
+    const raw = JSON.parse(readFileSync(serverFunctionsManifestPath, "utf8"));
+    cachedServerFunctionsManifest = {};
+    for (const key in raw) {
+      cachedServerFunctionsManifest[key] = new Set(raw[key]);
+    }
+    console.log("[Dinou Handler] Loaded server functions manifest");
+  } catch (e) {
+    cachedServerFunctionsManifest = null;
+  }
+}
+
+function getServerFunctionsManifest() {
+  if (isDevelopment) {
+    if (existsSync(serverFunctionsManifestPath)) {
+      try {
+        const raw = JSON.parse(readFileSync(serverFunctionsManifestPath, "utf8"));
+        const manifest = {};
+        for (const key in raw) {
+          manifest[key] = new Set(raw[key]);
+        }
+        return manifest;
+      } catch (e) {
+        return null;
+      }
+    }
+    return null;
+  }
+  if (!cachedServerFunctionsManifest && existsSync(serverFunctionsManifestPath)) {
+    try {
+      const raw = JSON.parse(readFileSync(serverFunctionsManifestPath, "utf8"));
+      cachedServerFunctionsManifest = {};
+      for (const key in raw) {
+        cachedServerFunctionsManifest[key] = new Set(raw[key]);
+      }
+    } catch (e) {}
+  }
+  return cachedServerFunctionsManifest;
+}
+
 // Anti-Bot Shield patterns
 const botGarbagePatterns = [
   /\.php$/i,
@@ -506,9 +556,17 @@ async function handleRequest(request) {
         return Response.json({ error: "Forbidden access" }, { status: 403 });
       }
 
+      const sfManifest = getServerFunctionsManifest();
+      if (sfManifest) {
+        const allowedExports = sfManifest[normalizedRelativePath];
+        if (!allowedExports || !allowedExports.has(exportName)) {
+          return Response.json({ error: "Invalid export name" }, { status: 400 });
+        }
+      }
+
       const absPath = path.resolve(process.cwd(), relativePath);
       const mod = await importModule(absPath);
-      const fn = mod[exportName];
+      const fn = exportName === "default" ? mod.default : mod[exportName];
 
       if (typeof fn !== "function") {
         return Response.json({ error: `Function '${exportName}' not found` }, { status: 404 });
