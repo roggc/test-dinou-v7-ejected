@@ -7,6 +7,7 @@
 
 [functions]
   directory = ".dinou/dist3/server"
+  node_bundler = "none"
   included_files = [
     "src/**",
     "dinou/**",
