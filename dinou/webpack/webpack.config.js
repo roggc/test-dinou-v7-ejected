@@ -352,7 +352,7 @@ module.exports = async () => {
       exprContextCritical: false,
     },
     ignoreWarnings: [
-      /Critical dependency: the request of a dependency is an expression/,
+      /Critical dependency/,
     ],
     plugins: [
       new webpack.BannerPlugin({
