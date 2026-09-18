@@ -348,6 +348,12 @@ module.exports = async () => {
       "@babel/core",
       "esbuild",
     ],
+    module: {
+      exprContextCritical: false,
+    },
+    ignoreWarnings: [
+      /Critical dependency: the request of a dependency is an expression/,
+    ],
     plugins: [
       new webpack.BannerPlugin({
         banner: "import { createRequire as ___createRequire } from 'node:module'; import { fileURLToPath as ___fileURLToPath } from 'node:url'; import ___path from 'node:path'; const require = ___createRequire(import.meta.url); const __filename = ___fileURLToPath(import.meta.url); const __dirname = ___path.dirname(__filename);",
