@@ -106,7 +106,13 @@ try {
       "chokidar",
       "dotenv",
       "fsevents",
+      "@swc/core",
+      "@babel/core",
+      "esbuild",
     ],
+    banner: {
+      js: "import { createRequire as ___createRequire } from 'node:module'; import { fileURLToPath as ___fileURLToPath } from 'node:url'; import ___path from 'node:path'; const require = ___createRequire(import.meta.url); const __filename = ___fileURLToPath(import.meta.url); const __dirname = ___path.dirname(__filename);",
+    },
     sourcemap: true,
   });
   console.log("[esbuild] Server bundles created at .dinou/dist3/server/");

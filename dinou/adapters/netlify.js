@@ -5,18 +5,17 @@
 const { handleRequest } = require("../core/handler.js");
 
 /**
- * Netlify Function handler
+ * Netlify Function v2 handler
  * @param {Request} request 
  * @param {object} context 
  * @returns {Promise<Response>}
  */
-async function netlifyHandler(request, context) {
+export default async function netlifyHandler(request, context) {
   return handleRequest(request);
 }
 
-module.exports = netlifyHandler;
-module.exports.default = netlifyHandler;
-module.exports.config = {
+export const config = {
   path: "/*",
   preferStatic: true,
 };
+

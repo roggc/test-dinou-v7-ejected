@@ -701,3 +701,5 @@ module.exports = {
   handleRequest,
   WebResponseBridge,
 };
+module.exports.default = handleRequest;
+
