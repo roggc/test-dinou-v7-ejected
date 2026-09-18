@@ -597,7 +597,7 @@ app.use(express.static(path.resolve(process.cwd(), outputFolder)));
 const { nodeToWebRequest, sendWebResponseToNode } = require("./http-adapter.js");
 const { handleRequest } = require("./handler.js");
 
-app.all("*", async (req, res, next) => {
+app.use(async (req, res, next) => {
   try {
     const webRequest = nodeToWebRequest(req);
     const webResponse = await handleRequest(webRequest);
