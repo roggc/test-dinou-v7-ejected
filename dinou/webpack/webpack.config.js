@@ -65,7 +65,7 @@ module.exports = async () => {
   // 🔥 CLEAN HARD
   cleanDir(outputDir);
   const [cssEntries] = await getCSSEntries();
-  return {
+  const clientConfig = {
     performance: {
       hints: isDevelopment ? false : "warning",
       maxEntrypointSize: 512000,
@@ -104,7 +104,7 @@ module.exports = async () => {
       path: path.resolve(process.cwd(), outputDirectory),
       filename: "[name]-[contenthash].js",
       publicPath: "/",
-      clean: true,
+      clean: isDevelopment,
       library: {
         type: "module",
       },
@@ -309,4 +309,53 @@ module.exports = async () => {
       }
       : {}),
   };
+
+  if (isDevelopment) {
+    return clientConfig;
+  }
+
+  const serverConfig = {
+    mode: "production",
+    target: "node20",
+    experiments: {
+      outputModule: true,
+    },
+    entry: {
+      handler: path.resolve(__dirname, "../core/handler.js"),
+      netlify: path.resolve(__dirname, "../adapters/netlify.js"),
+    },
+    output: {
+      path: path.resolve(process.cwd(), outputDirectory, "server"),
+      filename: "[name].js",
+      library: {
+        type: "module",
+      },
+      chunkFormat: "module",
+    },
+    resolve: {
+      conditionNames: ["react-server", "node", "import", "require"],
+      extensions: [".js", ".jsx", ".ts", ".tsx"],
+      alias: {
+        ...(isEjected ? { dinou: localDinouPath } : {}),
+      },
+    },
+    externals: [
+      "express",
+      "chokidar",
+      "dotenv",
+      "fsevents",
+      "@swc/core",
+      "@babel/core",
+      "esbuild",
+    ],
+    plugins: [
+      new webpack.BannerPlugin({
+        banner: "import { createRequire as ___createRequire } from 'node:module'; import { fileURLToPath as ___fileURLToPath } from 'node:url'; import ___path from 'node:path'; const require = ___createRequire(import.meta.url); const __filename = ___fileURLToPath(import.meta.url); const __dirname = ___path.dirname(__filename);",
+        raw: true,
+        entryOnly: false,
+      }),
+    ],
+  };
+
+  return [clientConfig, serverConfig];
 };

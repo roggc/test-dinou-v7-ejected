@@ -2,7 +2,7 @@
 // Netlify Functions v2 Adapter for Dinou.
 // Automatically routes all requests to Dinou's universal Web Standards handler.
 
-const { handleRequest } = require("../core/handler.js");
+import { handleRequest } from "../core/handler.js";
 
 /**
  * Netlify Function v2 handler
