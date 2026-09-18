@@ -594,6 +594,19 @@ function getContextForServerFunctionEndpoint(req, res) {
 
 app.use(express.static(path.resolve(process.cwd(), outputFolder)));
 
+const { nodeToWebRequest, sendWebResponseToNode } = require("./http-adapter.js");
+const { handleRequest } = require("./handler.js");
+
+app.all("*", async (req, res, next) => {
+  try {
+    const webRequest = nodeToWebRequest(req);
+    const webResponse = await handleRequest(webRequest);
+    await sendWebResponseToNode(webResponse, res);
+  } catch (err) {
+    next(err);
+  }
+});
+
 const clientManifestResolvedPath = path.resolve(
   process.cwd(),
   isWebpack

@@ -87,6 +87,29 @@ try {
       outdir,
     })
   );
+
+  // 🚀 Server & Adapter Pre-bundling with react-server condition
+  console.log("[esbuild] Pre-bundling server handler and adapters with conditions: ['react-server']...");
+  await esbuild.build({
+    entryPoints: {
+      handler: path.resolve(__dirname, "../core/handler.js"),
+      netlify: path.resolve(__dirname, "../adapters/netlify.js"),
+    },
+    bundle: true,
+    platform: "node",
+    target: "node20",
+    format: "esm",
+    conditions: ["react-server", "node", "import"],
+    outdir: ".dinou/dist3/server",
+    external: [
+      "express",
+      "chokidar",
+      "dotenv",
+      "fsevents",
+    ],
+    sourcemap: true,
+  });
+  console.log("[esbuild] Server bundles created at .dinou/dist3/server/");
 } catch (err) {
   console.error("Error in build:", err);
 }
