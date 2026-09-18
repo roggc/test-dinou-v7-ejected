@@ -9,7 +9,18 @@
   directory = ".dinou/dist3/server"
   node_bundler = "none"
   included_files = [
+    "package.json",
     "src/**",
     "dinou/**",
-    ".dinou/**"
+    ".dinou/**",
+    "node_modules/**",
+    "!node_modules/@swc/**",
+    "!node_modules/typescript/**",
+    "!node_modules/webpack*/**",
+    "!node_modules/@esbuild/**",
+    "!node_modules/esbuild/**",
+    "!node_modules/@rollup/**",
+    "!node_modules/rollup/**",
+    "!node_modules/.cache/**",
+    "!node_modules/@types/**"
   ]

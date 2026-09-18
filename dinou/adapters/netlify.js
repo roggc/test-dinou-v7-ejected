@@ -12,7 +12,9 @@ if (typeof register === "function") {
   try {
     const loaderPath = path.join(dinouCoreDir, "babel-esm-loader.js");
     register(pathToFileURL(loaderPath).href, pathToFileURL("./"));
-  } catch (e) {}
+  } catch (e) {
+    console.error("[Dinou Adapter] Loader registration failed:", e);
+  }
 }
 
 let reactServerPath, reactDomServerPath, reactJsxRuntimePath, reactJsxDevRuntimePath;
