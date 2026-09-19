@@ -32,7 +32,7 @@ const {
   getServerFunctionsManifest,
 } = require("./manifest-provider.js");
 const { pipeRSC, isEdgeRuntime } = require("./rsc-renderer.js");
-const { getStorageAdapter } = require("./storage-adapter.js");
+const { getStorageAdapter, setStorageAdapter } = require("./storage-adapter.js");
 
 // Load Dinou configuration and plugins
 let dinouConfig = { plugins: [] };
@@ -42,6 +42,9 @@ const dinouConfigPath = typeof process !== "undefined" && typeof process.cwd ===
 if (dinouConfigPath && existsSync(dinouConfigPath)) {
   try {
     dinouConfig = require(dinouConfigPath);
+    if (dinouConfig && dinouConfig.storage) {
+      setStorageAdapter(dinouConfig.storage);
+    }
   } catch (err) {
     console.error("[Dinou] Error loading dinou.config.js in handler:", err);
   }
