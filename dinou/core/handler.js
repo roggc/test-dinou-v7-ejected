@@ -377,11 +377,19 @@ class WebResponseBridge extends PassThrough {
   }
 
   write(chunk, encoding, callback) {
+    if (this.writableEnded || this.destroyed) {
+      if (typeof callback === "function") callback();
+      return false;
+    }
     this._commitHeaders();
     return super.write(chunk, encoding, callback);
   }
 
   end(chunk, encoding, callback) {
+    if (this.writableEnded || this.destroyed) {
+      if (typeof callback === "function") callback();
+      return this;
+    }
     this._commitHeaders();
     return super.end(chunk, encoding, callback);
   }
@@ -682,10 +690,19 @@ async function handleRequest(request) {
         });
       } catch (e) {
         if (e && e.$$type === "dinou-internal-redirect") {
-          bridge.setHeader("Content-Type", "text/x-component");
-          bridge.setHeader("x-rsc-redirect", e.url);
-          bridge.end();
-          return bridge.toResponse();
+          const safeUrl = JSON.stringify(e.url);
+          if (!bridge.headersSent) {
+            bridge.setHeader("Content-Type", "application/json");
+            bridge.setHeader("X-Dinou-Redirect", e.url);
+            bridge.setHeader("x-rsc-redirect", e.url);
+            bridge.status(200);
+            bridge.json({ redirect: e.url });
+            return bridge.toResponse();
+          } else {
+            bridge.write(`D:{"type":"redirect","url":${safeUrl}}\n`);
+            bridge.end();
+            return bridge.toResponse();
+          }
         }
         throw e;
       }
@@ -884,8 +901,7 @@ async function handleRequest(request) {
     if (existsSync(fileToRead) && !dynamicState.value) {
       bridge.setHeader("Content-Type", "text/html; charset=utf-8");
       bridge.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
-      const status = getStatus(reqPath) || 200;
-      bridge.status(status);
+      let status = getStatus(reqPath);
       try {
         let htmlContent = readFileSync(fileToRead, "utf8");
         let buildId = "";
@@ -894,8 +910,13 @@ async function handleRequest(request) {
           if (existsSync(metadataPath)) {
             const metaObj = JSON.parse(readFileSync(metadataPath, "utf8"));
             buildId = metaObj.generatedAt || "";
+            if (!status && metaObj.status) {
+              status = metaObj.status;
+            }
           }
         } catch (e) {}
+
+        bridge.status(status || 200);
 
         let scripts = `<script>window.__DINOU_USE_STATIC__=true;</script>`;
         if (htmlPathOld && existsSync(htmlPathOld)) {
