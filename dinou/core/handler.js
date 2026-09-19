@@ -21,6 +21,7 @@ const { getErrorJSX } = require("./get-error-jsx.js");
 const importModule = require("./import-module.js");
 const renderAppToHtml = require("./render-app-to-html.js");
 const { revalidating, regenerating } = require("./revalidating.js");
+const { generatingISG } = require("./generating-isg.js");
 const { requestStorage } = require("./request-context.js");
 const processLimiter = require("./concurrency-manager.js");
 const { getStatus } = require("./status-manifest.js");
@@ -150,6 +151,107 @@ const botGarbagePatterns = [
 
 const isDynamic = new Map();
 const pageFunctionsConfigCache = new Map();
+
+/**
+ * Resolves page_functions configuration (allowISG, validateParams, getStaticPaths)
+ * and determines whether the current request path is blocked or allowed for ISG.
+ */
+async function resolvePageFunctionsConfig(pagePath, reqSegments, queryObj, dynamicParams, reqPath) {
+  let isPathBlocked = false;
+  let allowISGValue = true;
+
+  if (pagePath) {
+    let cachedConfig = pageFunctionsConfigCache.get(pagePath);
+    if (!cachedConfig) {
+      const pageFolder = path.dirname(pagePath);
+      const [pageFunctionsPath] = getFilePathAndDynamicParams(
+        reqSegments,
+        queryObj,
+        pageFolder,
+        "page_functions",
+        true,
+        true,
+        undefined,
+        reqSegments.length,
+      );
+
+      if (pageFunctionsPath) {
+        const pageFunctionsModule = await importModule(pageFunctionsPath);
+        const resolvedAllowISG = pageFunctionsModule.allowISG
+          ? await pageFunctionsModule.allowISG()
+          : true;
+
+        let staticPathsSet = null;
+        if (pageFunctionsModule.getStaticPaths) {
+          const paths = await pageFunctionsModule.getStaticPaths();
+          staticPathsSet = new Set(
+            (paths || []).map((pathObj) => {
+              const sortedEntries = Object.entries(pathObj).sort((a, b) =>
+                a[0].localeCompare(b[0])
+              );
+              return JSON.stringify(sortedEntries);
+            })
+          );
+        }
+
+        cachedConfig = {
+          allowISG: resolvedAllowISG,
+          staticPathsSet,
+          validateParams: pageFunctionsModule.validateParams || null,
+        };
+      } else {
+        cachedConfig = {
+          allowISG: true,
+          staticPathsSet: null,
+          validateParams: null,
+        };
+      }
+
+      if (!isDevelopment) {
+        pageFunctionsConfigCache.set(pagePath, cachedConfig);
+      }
+    }
+
+    const { allowISG: cachedAllowISG, staticPathsSet, validateParams: validateParamsFn } = cachedConfig;
+    allowISGValue = cachedAllowISG;
+    const hasParams = Object.keys(dynamicParams || {}).length > 0;
+    if (hasParams) {
+      if (validateParamsFn) {
+        const isValid = await validateParamsFn(dynamicParams);
+        if (!isValid) {
+          isPathBlocked = true;
+        }
+      }
+
+      if (!isPathBlocked && allowISGValue === false) {
+        let isPathAllowed = false;
+        if (staticPathsSet) {
+          const sortedQueryEntries = Object.entries(dynamicParams)
+            .sort((a, b) => a[0].localeCompare(b[0]))
+            .map(([k, v]) => {
+              if (Array.isArray(v)) return [k, v.join(",")];
+              return [k, String(v)];
+            });
+          const serializedQuery = JSON.stringify(sortedQueryEntries);
+          isPathAllowed = staticPathsSet.has(serializedQuery);
+        }
+        if (!isPathAllowed) {
+          if (isDevelopment) {
+            isPathBlocked = true;
+          } else {
+            const cleanReq = reqPath.replace(/^\//, "").replace(/\/$/, "");
+            const htmlPath = path.join(process.cwd(), ".dinou/dist2", cleanReq, "index.html");
+            if (!existsSync(htmlPath)) {
+              isPathBlocked = true;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return { isPathBlocked, allowISGValue };
+}
 
 /**
  * Parses the Cookie header into an object dictionary.
@@ -615,6 +717,10 @@ async function handleRequest(request) {
       .replace("/____rsc_payload____", "")
       .replace("/____rsc_payload_error____", "");
 
+    const reqSegments = cleanPath.split("/").filter(Boolean);
+    const srcFolder = path.resolve(process.cwd(), "src");
+    const [pagePath, dynamicParams] = getFilePathAndDynamicParams(reqSegments, queryObj, srcFolder);
+
     if (!isDynamic.has(cleanPath)) {
       isDynamic.set(cleanPath, { value: false });
     }
@@ -634,16 +740,21 @@ async function handleRequest(request) {
       }
     }
 
-    const reqSegments = cleanPath.split("/").filter(Boolean);
-    const srcFolder = path.resolve(process.cwd(), "src");
-    const [pagePath] = getFilePathAndDynamicParams(reqSegments, queryObj, srcFolder);
+    const reqPath = cleanPath.endsWith("/") ? cleanPath : cleanPath + "/";
+    const { isPathBlocked } = await resolvePageFunctionsConfig(
+      pagePath,
+      reqSegments,
+      queryObj,
+      dynamicParams,
+      reqPath,
+    );
 
     const context = createRequestContext(simReq, bridge);
     const isNotFound = {};
 
     await requestStorage.run(context, async () => {
       try {
-        const jsx = await getJSX(cleanPath, queryObj, isNotFound, isDevelopment, false);
+        const jsx = await getJSX(cleanPath, queryObj, isNotFound, isDevelopment, isPathBlocked);
         if (isNotFound.value) {
           bridge.status(404);
         }
@@ -687,8 +798,16 @@ async function handleRequest(request) {
   }
   const dynamicState = isDynamic.get(reqPath);
 
+  const { isPathBlocked, allowISGValue } = await resolvePageFunctionsConfig(
+    pagePath,
+    reqSegments,
+    queryObj,
+    dynamicParams,
+    reqPath,
+  );
+
   // Serve static pre-rendered HTML if available in production
-  if (!isDevelopment && !dynamicState.value && pagePath) {
+  if (!isDevelopment && !dynamicState.value && pagePath && !isPathBlocked) {
     revalidating(reqPath, dynamicState);
     const htmlPath = path.join(".dinou/dist2", reqPath, "index.html");
     if (existsSync(htmlPath) && !dynamicState.value) {
@@ -714,7 +833,6 @@ async function handleRequest(request) {
 
   const isDynamicSSR = true;
   const capturedStatus = null;
-  const isPathBlocked = false;
 
   processLimiter
     .run(async () => {
@@ -733,7 +851,20 @@ async function handleRequest(request) {
         appHtmlStream.pipe(bridge);
 
         await new Promise((resolve) => {
-          appHtmlStream.on("end", resolve);
+          appHtmlStream.on("end", () => {
+            if (
+              !isDevelopment &&
+              bridge.statusCode === 200 &&
+              request.method === "GET" &&
+              pagePath &&
+              !isPathBlocked &&
+              allowISGValue !== false &&
+              Object.keys(queryObj).length === 0
+            ) {
+              generatingISG(reqPath, dynamicState);
+            }
+            resolve();
+          });
           appHtmlStream.on("error", (error) => {
             console.error("[Dinou] Stream error:", error);
             if (!bridge.headersSent) bridge.status(500).send("Internal Server Error");
