@@ -706,7 +706,45 @@ async function handleRequest(request) {
     }
   }
 
-  // 5. RSC Payload Endpoints (GET /____rsc_payload____/*)
+  // 5. Client Error RSC Endpoint (POST /____rsc_payload_error____/*)
+  if (pathname.includes("____rsc_payload_error____") && request.method === "POST") {
+    try {
+      const cleanPath = (pathname.endsWith("/") ? pathname : pathname + "/")
+        .replace("/____rsc_payload_error____", "");
+
+      let body = {};
+      try {
+        body = await request.json();
+      } catch (e) {}
+
+      const clientError = body?.error || { message: "Unknown Error" };
+      const context = createRequestContext(simReq, bridge);
+
+      await requestStorage.run(context, async () => {
+        const jsx = await getErrorJSX(
+          cleanPath,
+          queryObj,
+          clientError,
+          isDevelopment,
+        );
+        bridge.setHeader("Content-Type", "text/x-component");
+        bridge.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+
+        const manifest = getClientManifest();
+        const { pipe } = isWebpack
+          ? renderToPipeableStream(jsx, manifest)
+          : renderToPipeableStream(jsx, pathToFileURL(process.cwd()).href + "/");
+
+        pipe(bridge);
+      });
+      return bridge.toResponse();
+    } catch (err) {
+      console.error("[Dinou] Error rendering fallback error RSC:", err);
+      return new Response("Internal Server Error", { status: 500 });
+    }
+  }
+
+  // 6. RSC Payload Endpoints (GET /____rsc_payload____/*)
   if (pathname.includes("____rsc_payload")) {
     const isOld = pathname.includes("old");
     const isStatic = pathname.includes("static");
@@ -714,8 +752,7 @@ async function handleRequest(request) {
       .replace("/____rsc_payload_old_static____", "")
       .replace("/____rsc_payload_old____", "")
       .replace("/____rsc_payload_static____", "")
-      .replace("/____rsc_payload____", "")
-      .replace("/____rsc_payload_error____", "");
+      .replace("/____rsc_payload____", "");
 
     const reqSegments = cleanPath.split("/").filter(Boolean);
     const srcFolder = path.resolve(process.cwd(), "src");
@@ -727,16 +764,44 @@ async function handleRequest(request) {
     const dynamicState = isDynamic.get(cleanPath);
 
     if ((!isDevelopment && !dynamicState.value) || isStatic) {
+      let currentGeneratedAt = null;
+      try {
+        const metadataPath = path.join(".dinou/dist2", cleanPath, "metadata.json");
+        if (existsSync(metadataPath)) {
+          const metaObj = JSON.parse(readFileSync(metadataPath, "utf8"));
+          currentGeneratedAt = metaObj.generatedAt || null;
+        }
+      } catch (e) {}
+
+      const useOld =
+        isOld ||
+        regenerating.has(cleanPath) ||
+        (queryObj.buildId &&
+          currentGeneratedAt &&
+          queryObj.buildId !== String(currentGeneratedAt));
+
       const payloadPath = path.resolve(
         ".dinou/dist2",
         cleanPath.replace(/^\//, ""),
-        isOld ? "rsc._old.rsc" : "rsc.rsc",
+        useOld ? "rsc._old.rsc" : "rsc.rsc",
       );
+
+      const distDir = path.resolve(".dinou/dist2");
+      if (!payloadPath.startsWith(distDir)) {
+        return new Response("Forbidden", { status: 403 });
+      }
+
       if (existsSync(payloadPath)) {
         bridge.setHeader("Content-Type", "application/octet-stream");
         bridge.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
-        bridge.end(readFileSync(payloadPath));
-        return bridge.toResponse();
+        try {
+          const buffer = readFileSync(payloadPath);
+          bridge.end(buffer);
+          return bridge.toResponse();
+        } catch (err) {
+          console.error("[Dinou] Error reading RSC file:", err);
+          return new Response("Internal Server Error", { status: 500 });
+        }
       }
     }
 
@@ -783,7 +848,7 @@ async function handleRequest(request) {
     return bridge.toResponse();
   }
 
-  // 6. Page SSR HTML & ISG/ISR (GET /*)
+  // 7. Page SSR HTML & ISG/ISR (GET /*)
   const reqSegments = pathname.split("/").filter(Boolean);
   const srcFolder = path.resolve(process.cwd(), "src");
   const [pagePath, dynamicParams] = getFilePathAndDynamicParams(reqSegments, queryObj, srcFolder);
@@ -809,14 +874,45 @@ async function handleRequest(request) {
   // Serve static pre-rendered HTML if available in production
   if (!isDevelopment && !dynamicState.value && pagePath && !isPathBlocked) {
     revalidating(reqPath, dynamicState);
+    let htmlPathOld;
+    if (regenerating.has(reqPath)) {
+      htmlPathOld = path.join(".dinou/dist2", reqPath, "index._old.html");
+    }
     const htmlPath = path.join(".dinou/dist2", reqPath, "index.html");
-    if (existsSync(htmlPath) && !dynamicState.value) {
+    const fileToRead = (htmlPathOld && existsSync(htmlPathOld)) ? htmlPathOld : htmlPath;
+
+    if (existsSync(fileToRead) && !dynamicState.value) {
       bridge.setHeader("Content-Type", "text/html; charset=utf-8");
       bridge.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
       const status = getStatus(reqPath) || 200;
       bridge.status(status);
-      bridge.end(readFileSync(htmlPath));
-      return bridge.toResponse();
+      try {
+        let htmlContent = readFileSync(fileToRead, "utf8");
+        let buildId = "";
+        try {
+          const metadataPath = path.join(".dinou/dist2", reqPath, "metadata.json");
+          if (existsSync(metadataPath)) {
+            const metaObj = JSON.parse(readFileSync(metadataPath, "utf8"));
+            buildId = metaObj.generatedAt || "";
+          }
+        } catch (e) {}
+
+        let scripts = `<script>window.__DINOU_USE_STATIC__=true;</script>`;
+        if (htmlPathOld && existsSync(htmlPathOld)) {
+          scripts += `<script>window.__DINOU_USE_OLD_RSC__=true;</script>`;
+        }
+        if (buildId) {
+          scripts += `<script>window.__DINOU_BUILD_ID__="${buildId}";</script>`;
+        }
+
+        htmlContent = htmlContent.replace("</head>", `${scripts}</head>`);
+        bridge.end(htmlContent);
+        return bridge.toResponse();
+      } catch (err) {
+        console.error("[Dinou] Error reading HTML file:", err);
+        if (!bridge.headersSent) bridge.status(500).send("Server Error");
+        return bridge.toResponse();
+      }
     }
   }
 
