@@ -390,18 +390,23 @@ const http = require("http");
     });
 
     if (!isDevelopment) {
-      console.log("🏗️  [Background] Starting static generation (SSG)...");
+      const dist2Path = path.resolve(process.cwd(), ".dinou/dist2");
+      if (existsSync(dist2Path)) {
+        console.log("⚡ [Startup] Pre-rendered static pages found at .dinou/dist2");
+      } else {
+        console.log("🏗️  [Background] Starting static generation (SSG)...");
 
-      generateStatic()
-        .then(() => {
-          console.log("✅ [Background] Static generation finished.");
-        })
-        .catch((err) => {
-          console.error(
-            "❌ [Background] Static generation failed (App continues in Dynamic Mode):",
-            err,
-          );
-        });
+        generateStatic()
+          .then(() => {
+            console.log("✅ [Background] Static generation finished.");
+          })
+          .catch((err) => {
+            console.error(
+              "❌ [Background] Static generation failed (App continues in Dynamic Mode):",
+              err,
+            );
+          });
+      }
     } else {
       console.log("⚙️  [Startup] Running in Development Mode");
     }

@@ -120,6 +120,13 @@ try {
     JSON.stringify({ type: "module" }, null, 2)
   );
   console.log("[esbuild] Server bundles created at .dinou/dist3/server/");
+
+  // 🏗️ Pre-render static pages (SSG) at build time
+  const { execSync } = await import("node:child_process");
+  execSync(`"${process.execPath}" "${path.resolve(__dirname, "../core/run-ssg.js")}"`, {
+    stdio: "inherit",
+    env: { ...process.env, NODE_ENV: "production" },
+  });
 } catch (err) {
   console.error("Error in build:", err);
 }
