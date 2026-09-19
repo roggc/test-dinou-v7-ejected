@@ -86,7 +86,6 @@ addHook({
   },
   publicPath: "/assets/",
 });
-const generateStatic = require("./generate-static.js");
 
 // Load Dinou configuration and plugins
 let dinouConfig = { plugins: [] };
@@ -394,18 +393,9 @@ const http = require("http");
       if (existsSync(dist2Path)) {
         console.log("⚡ [Startup] Pre-rendered static pages found at .dinou/dist2");
       } else {
-        console.log("🏗️  [Background] Starting static generation (SSG)...");
-
-        generateStatic()
-          .then(() => {
-            console.log("✅ [Background] Static generation finished.");
-          })
-          .catch((err) => {
-            console.error(
-              "❌ [Background] Static generation failed (App continues in Dynamic Mode):",
-              err,
-            );
-          });
+        console.warn(
+          "⚠️  [Startup] Pre-rendered static pages not found at .dinou/dist2. Operating in Dynamic Mode (ISG will promote pages on demand).",
+        );
       }
     } else {
       console.log("⚙️  [Startup] Running in Development Mode");
