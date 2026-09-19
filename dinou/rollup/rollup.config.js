@@ -235,6 +235,21 @@ module.exports = async function () {
       commonjs({
         ignoreDynamicRequires: true,
       }),
+      {
+        name: "post-build-server",
+        closeBundle() {
+          const fs = require("fs");
+          fs.writeFileSync(
+            path.resolve(process.cwd(), ".dinou/dist3/server/package.json"),
+            JSON.stringify({ type: "module" }, null, 2)
+          );
+          const { execSync } = require("child_process");
+          execSync(`"${process.execPath}" "${path.resolve(__dirname, "../core/run-ssg.js")}"`, {
+            stdio: "inherit",
+            env: { ...process.env, NODE_ENV: "production" },
+          });
+        },
+      },
     ],
     onwarn(warning, warn) {
       if (warning.code === "CIRCULAR_DEPENDENCY" || warning.code === "EVAL") {

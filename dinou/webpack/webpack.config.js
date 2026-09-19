@@ -65,6 +65,28 @@ module.exports = async () => {
   // 🔥 CLEAN HARD
   cleanDir(outputDir);
   const [cssEntries] = await getCSSEntries();
+
+  let clientDone = false;
+  let serverDone = false;
+  let ssgExecuted = false;
+
+  function runPostBuild() {
+    if (clientDone && serverDone && !ssgExecuted) {
+      ssgExecuted = true;
+      const fs = require("fs");
+      const serverDir = path.resolve(process.cwd(), ".dinou/dist3/server");
+      fs.mkdirSync(serverDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(serverDir, "package.json"),
+        JSON.stringify({ type: "module" }, null, 2)
+      );
+      const { execSync } = require("child_process");
+      execSync(`"${process.execPath}" "${path.resolve(__dirname, "../core/run-ssg.js")}"`, {
+        stdio: "inherit",
+        env: { ...process.env, NODE_ENV: "production", DINOU_BUILD_TOOL: "webpack" },
+      });
+    }
+  }
   const clientConfig = {
     performance: {
       hints: isDevelopment ? false : "warning",
@@ -226,6 +248,14 @@ module.exports = async () => {
       new ServerFunctionsPlugin({
         manifest: manifestGeneratorPlugin.manifestData,
       }),
+      !isDevelopment && {
+        apply(compiler) {
+          compiler.hooks.done.tap("PostBuildClient", () => {
+            clientDone = true;
+            runPostBuild();
+          });
+        },
+      },
     ].filter(Boolean),
     resolve: {
       extensions: [".js", ".jsx", ".ts", ".tsx"],
@@ -360,6 +390,14 @@ module.exports = async () => {
         raw: true,
         entryOnly: false,
       }),
+      {
+        apply(compiler) {
+          compiler.hooks.done.tap("PostBuildServer", () => {
+            serverDone = true;
+            runPostBuild();
+          });
+        },
+      },
     ],
   };
 
