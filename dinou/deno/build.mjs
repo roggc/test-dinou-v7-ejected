@@ -1,5 +1,5 @@
-// dinou/cloudflare/build.mjs
-// Build script for packaging Dinou v7 for Cloudflare Workers.
+// dinou/deno/build.mjs
+// Build script for packaging Dinou v7 for Deno Deploy & Edge.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -10,15 +10,15 @@ const require = createRequire(import.meta.url);
 const { generateRouteModulesCode } = require("../core/route-generator.js");
 
 const projectRoot = process.cwd();
-const cloudflareDir = path.resolve(projectRoot, ".dinou/cloudflare");
-fs.mkdirSync(cloudflareDir, { recursive: true });
+const denoDir = path.resolve(projectRoot, ".dinou/deno");
+fs.mkdirSync(denoDir, { recursive: true });
 
-console.log("⚡ [Dinou Cloudflare] Generating static route modules...");
+console.log("⚡ [Dinou Deno Edge] Generating static route modules...");
 const routeModulesCode = generateRouteModulesCode(projectRoot, "../..");
-const routeModulesPath = path.join(cloudflareDir, "route-modules.js");
+const routeModulesPath = path.join(denoDir, "route-modules.js");
 fs.writeFileSync(routeModulesPath, routeModulesCode, "utf8");
 
-console.log("📦 [Dinou Cloudflare] Preparing worker entry point...");
+console.log("📦 [Dinou Deno Edge] Preparing Deno Deploy entry point...");
 
 // Check manifests from build (supports Esbuild, Rollup, and Webpack output locations)
 function findManifest(filename, fallbackFolder) {
@@ -51,18 +51,33 @@ if (sfManifestPath) {
   manifestInlines += `\nglobalThis.__DINOU_SERVER_FUNCTIONS_MANIFEST__ = {};\n`;
 }
 
-const workerEntryContent = `// Auto-generated worker entry for Cloudflare Workers
+const denoEntryContent = `// Auto-generated entry for Deno Deploy / Edge
 import "./route-modules.js";
 ${manifestInlines}
-import worker from "../../dinou/adapters/cloudflare.js";
+import { handleRequest } from "../../dinou/core/handler.js";
+import { setStorageAdapter, DenoKVStorage } from "../../dinou/core/storage-adapter.js";
 
-export default worker;
+// Auto-configure Deno KV Storage for ISR on Edge
+if (typeof Deno !== "undefined" && typeof Deno.openKv === "function") {
+  setStorageAdapter(new DenoKVStorage());
+}
+
+export async function fetch(req) {
+  return handleRequest(req, { runtime: "deno-edge" });
+}
+
+if (typeof Deno !== "undefined" && typeof Deno.serve === "function") {
+  const port = Number(Deno.env.get("PORT") || 8000);
+  Deno.serve({ port }, fetch);
+}
+
+export default { fetch };
 `;
 
-const workerEntryPath = path.join(cloudflareDir, "worker-entry.js");
-fs.writeFileSync(workerEntryPath, workerEntryContent, "utf8");
+const denoEntryPath = path.join(denoDir, "deno-entry.js");
+fs.writeFileSync(denoEntryPath, denoEntryContent, "utf8");
 
-console.log("🚀 [Dinou Cloudflare] Bundling worker with esbuild...");
+console.log("🚀 [Dinou Deno Edge] Bundling edge application with esbuild...");
 
 const nodeBuiltins = [
   "assert", "async_hooks", "buffer", "child_process", "cluster", "console",
@@ -76,23 +91,24 @@ const nodeBuiltins = [
 ];
 
 const externalList = [
-  "cloudflare:*",
+  "npm:*",
+  "jsr:*",
   ...nodeBuiltins,
   ...nodeBuiltins.map((b) => "node:" + b),
 ];
 
-const outfile = path.join(cloudflareDir, "worker.js");
+const outfile = path.join(denoDir, "main.js");
 
 try {
   await esbuild.build({
-    entryPoints: [workerEntryPath],
+    entryPoints: [denoEntryPath],
     outfile,
     bundle: true,
     format: "esm",
     target: "es2022",
     platform: "neutral",
     mainFields: ["module", "main"],
-    conditions: ["workerd", "worker", "react-server", "browser"],
+    conditions: ["deno", "worker", "react-server", "browser"],
     external: externalList,
     alias: {
       "@": path.resolve(projectRoot, "src"),
@@ -114,14 +130,15 @@ try {
     },
     define: {
       "process.env.NODE_ENV": '"production"',
-      "process.env.DINOU_RUNTIME": '"edge"',
+      "process.env.DINOU_RUNTIME": '"deno-edge"',
     },
     logLevel: "info",
   });
 
-  console.log(`✅ [Dinou Cloudflare] Worker bundled successfully: ${outfile}`);
-  console.log("👉 Deploy to Cloudflare using: npx wrangler deploy");
+  console.log(`\n🎉 [Dinou Deno Edge] Build successful!`);
+  console.log(`   Output file: ${outfile}`);
+  console.log(`   Deploy with: deployctl deploy --project=<your-project> ${outfile}\n`);
 } catch (err) {
-  console.error("❌ [Dinou Cloudflare] Worker bundling failed:", err);
+  console.error("❌ [Dinou Deno Edge] Build failed:", err);
   process.exit(1);
 }
