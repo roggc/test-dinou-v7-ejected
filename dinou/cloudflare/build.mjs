@@ -5,11 +5,13 @@ import fs from "node:fs";
 import path from "node:path";
 import esbuild from "esbuild";
 import { createRequire } from "node:module";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const require = createRequire(import.meta.url);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const { generateRouteModulesCode } = require("../core/route-generator.js");
+const parseExports = require("../core/parse-exports.js");
+const { useClientRegex } = require("../constants.js");
 
 const projectRoot = process.cwd();
 const cloudflareDir = path.resolve(projectRoot, ".dinou/cloudflare");
@@ -73,8 +75,16 @@ const sfManifestPath = findManifest("server-functions-manifest.json", "server_fu
 
 let manifestInlines = "";
 if (clientManifestPath) {
-  const content = fs.readFileSync(clientManifestPath, "utf8");
-  manifestInlines += `\nglobalThis.__DINOU_CLIENT_MANIFEST__ = ${content};\n`;
+  const rawManifest = JSON.parse(fs.readFileSync(clientManifestPath, "utf8"));
+  const normalizedManifest = { ...rawManifest };
+  for (const [k, v] of Object.entries(rawManifest)) {
+    if (k.startsWith("file:///c:/")) {
+      normalizedManifest["file:///C:/" + k.slice(11)] = v;
+    } else if (k.startsWith("file:///C:/")) {
+      normalizedManifest["file:///c:/" + k.slice(11)] = v;
+    }
+  }
+  manifestInlines += `\nglobalThis.__DINOU_CLIENT_MANIFEST__ = ${JSON.stringify(normalizedManifest)};\n`;
 } else {
   manifestInlines += `\nglobalThis.__DINOU_CLIENT_MANIFEST__ = {};\n`;
 }
@@ -99,25 +109,40 @@ function walkVfs(dir) {
     const fullPath = path.join(dir, entry.name);
     const relFromSrc = path.relative(srcDir, fullPath).replace(/\\/g, "/");
     const edgePath = "/src/" + relFromSrc;
+    const slashPath = fullPath.replace(/\\/g, "/");
     if (isDir) {
       walkVfs(fullPath);
     } else {
       vfsSnapshot[edgePath] = { type: "file" };
-      vfsSnapshot[fullPath.replace(/\\/g, "/")] = { type: "file" };
+      vfsSnapshot[slashPath] = { type: "file" };
+      if (slashPath.length > 2 && slashPath[1] === ":") {
+        vfsSnapshot[slashPath.slice(2)] = { type: "file" };
+      }
+      vfsSnapshot["src/" + relFromSrc] = { type: "file" };
     }
   }
   const dirRel = path.relative(srcDir, dir).replace(/\\/g, "/");
   const edgeDir = dirRel ? "/src/" + dirRel : "/src";
+  const dirSlash = dir.replace(/\\/g, "/");
   vfsSnapshot[edgeDir] = { type: "directory", children };
-  vfsSnapshot[dir.replace(/\\/g, "/")] = { type: "directory", children };
+  vfsSnapshot[dirSlash] = { type: "directory", children };
+  if (dirSlash.length > 2 && dirSlash[1] === ":") {
+    vfsSnapshot[dirSlash.slice(2)] = { type: "directory", children };
+  }
+  vfsSnapshot[dirRel ? "src/" + dirRel : "src"] = { type: "directory", children };
 }
 walkVfs(srcDir);
-const vfsInline = `\nglobalThis.__DINOU_VFS__ = ${JSON.stringify(vfsSnapshot)};\n`;
+
+const envSetupContent = `// Auto-generated environment setup
+${manifestInlines}
+globalThis.__DINOU_VFS__ = ${JSON.stringify(vfsSnapshot)};
+`;
+const envSetupPath = path.join(cloudflareDir, "env-setup.js");
+fs.writeFileSync(envSetupPath, envSetupContent, "utf8");
 
 const workerEntryContent = `// Auto-generated worker entry for Cloudflare Workers
+import "./env-setup.js";
 import "./route-modules.js";
-${manifestInlines}
-${vfsInline}
 import worker from "${cloudflareAdapterPath}";
 
 export default worker;
@@ -153,6 +178,50 @@ const externalList = [
 
 const shimsDir = path.resolve(__dirname, "shims");
 
+const clientReferencesPlugin = {
+  name: "dinou-client-references",
+  setup(build) {
+    build.onLoad({ filter: /\.[jt]sx?$/ }, async (args) => {
+      if (args.path.includes("node_modules")) return null;
+      const normalizedPath = args.path.replace(/\\/g, "/");
+      if (normalizedPath.includes("dinou/core/navigation")) return null;
+
+      let code;
+      try {
+        code = fs.readFileSync(args.path, "utf8");
+      } catch (e) {
+        return null;
+      }
+
+      if (!useClientRegex.test(code.trim())) return null;
+
+      const exports = parseExports(code);
+      const absPath = path.resolve(args.path);
+      const fileUrl = pathToFileURL(absPath).href;
+
+      let proxyCode = `import { createClientModuleProxy } from "react-server-dom-webpack/server.edge";\n`;
+      proxyCode += `const proxy = createClientModuleProxy(${JSON.stringify(fileUrl)});\n`;
+
+      for (const name of exports) {
+        if (name === "default") {
+          proxyCode += `export default proxy.default;\n`;
+        } else {
+          proxyCode += `export const ${name} = proxy[${JSON.stringify(name)}];\n`;
+        }
+      }
+
+      if (!exports.includes("default")) {
+        proxyCode += `export default proxy.default;\n`;
+      }
+
+      return {
+        contents: proxyCode,
+        loader: "js",
+      };
+    });
+  },
+};
+
 const outfile = path.join(cloudflareDir, "worker.js");
 
 try {
@@ -166,8 +235,9 @@ try {
     mainFields: ["module", "main"],
     conditions: ["workerd", "worker", "react-server", "browser"],
     external: externalList,
+    plugins: [clientReferencesPlugin],
     banner: {
-      js: "import { createRequire as ___createRequire } from 'node:module'; const require = ___createRequire(import.meta.url || 'file:///worker.js'); globalThis.__dinou_require__ = require;",
+      js: "import { createRequire as ___createRequire } from 'node:module'; const require = ___createRequire(import.meta.url || 'file:///worker.js'); const __dirname = ''; const __filename = ''; globalThis.__dinou_require__ = require;",
     },
     alias: {
       "@": path.resolve(projectRoot, "src"),
