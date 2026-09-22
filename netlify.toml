@@ -1,7 +1,7 @@
 [build]
   command = "npm run build:deno"
   publish = ".dinou/dist3"
-  edge_functions = "dinou/adapters"
+  edge_functions = "dinou/adapters/netlify-edge"
 
 [build.environment]
   NODE_VERSION = "22"

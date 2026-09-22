@@ -2,7 +2,7 @@
 // Netlify Edge Functions (Deno) Adapter for Dinou v7.
 // Connects Netlify Edge Functions with Dinou's dual-bundle edge runtime.
 
-import { fetch as dinouFetch } from "../../.dinou/deno/main.js";
+import { fetch as dinouFetch } from "../../../.dinou/deno/main.js";
 
 /**
  * Netlify Edge Function handler
@@ -26,7 +26,7 @@ export default async function netlifyEdgeHandler(request, context) {
       if (res && res.status < 400) {
         return res;
       }
-    } catch (e) {}
+    } catch (e) { }
   }
 
   // Handle SSR, RSC, Server Functions, and ISG with Dinou Edge
