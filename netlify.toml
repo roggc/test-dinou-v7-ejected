@@ -1,7 +1,6 @@
 [build]
-  command = "npm run build:deno"
+  command = "npm run build"
   publish = ".dinou/dist3"
-  edge_functions = "dinou/adapters/netlify-edge"
 
 [build.environment]
   NODE_VERSION = "22"
@@ -9,20 +8,24 @@
 [environment]
   NODE_ENV = "production"
 
-[[edge_functions]]
-  function = "netlify-edge"
-  path = "/*"
-  excludedPath = [
-    "/assets/*",
-    "/favicon.ico",
-    "/*.ico",
-    "/*.png",
-    "/*.jpg",
-    "/*.jpeg",
-    "/*.svg",
-    "/*.webp",
-    "/*.webmanifest",
-    "/*.txt",
-    "/*.xml",
-    "/*.map"
+[functions]
+  directory = ".dinou/dist3/server"
+  node_bundler = "none"
+  included_files = [
+    "package.json",
+    "tsconfig.json",
+    "dinou.config.*",
+    "src/**",
+    "dinou/**",
+    ".dinou/**",
+    "node_modules/**",
+    "!node_modules/@swc/**",
+    "!node_modules/typescript/**",
+    "!node_modules/webpack*/**",
+    "!node_modules/@esbuild/**",
+    "!node_modules/esbuild/**",
+    "!node_modules/@rollup/**",
+    "!node_modules/rollup/**",
+    "!node_modules/.cache/**",
+    "!node_modules/@types/**"
   ]
