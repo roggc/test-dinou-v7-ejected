@@ -7,10 +7,17 @@ const { requestStorage } = require("./request-context.js");
 
 const isDevelopment = process.env.NODE_ENV !== "production";
 const isWebpack = process.env.DINOU_BUILD_TOOL === "webpack";
-
-const { renderToPipeableStream } = isWebpack
-  ? require("react-server-dom-webpack/server")
-  : require("@roggc/react-server-dom-esm/server");
+let _renderToPipeableStream = null;
+function getRenderToPipeableStream() {
+  if (!_renderToPipeableStream) {
+    const isWebpack = process.env.DINOU_BUILD_TOOL === "webpack";
+    const mod = isWebpack
+      ? require("react-server-dom-webpack/server")
+      : require("@roggc/react-server-dom-esm/server");
+    _renderToPipeableStream = mod.renderToPipeableStream;
+  }
+  return _renderToPipeableStream;
+}
 
 const manifestPath = path.resolve(
   process.cwd(),
@@ -185,6 +192,7 @@ function renderAppToHtml(
       isDynamic ? "true" : "false",
     ],
     {
+      execPath: process.env.NODE_BINARY || (typeof process.versions.bun !== "undefined" ? "node" : undefined),
       execArgv: childExecArgv,
       stdio: ["ignore", "pipe", "pipe", "ipc", "pipe"], // fd 4 is the RSC stream pipe
       env: { ...process.env, DINOU_PROCESS: "ssr-html" },
@@ -219,6 +227,7 @@ function renderAppToHtml(
             parentRes.status(404);
           }
           const manifest = getManifest();
+          const renderToPipeableStream = getRenderToPipeableStream();
           const { pipe } = isWebpack
             ? renderToPipeableStream(jsx, manifest)
             : renderToPipeableStream(jsx, url.pathToFileURL(process.cwd()).href + "/");
