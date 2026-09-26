@@ -10,15 +10,13 @@ const createScopedName = require("../core/createScopedName.js");
 const replace = require("@rollup/plugin-replace");
 const json = require("@rollup/plugin-json");
 const reactRefreshWrapModules = require("./react-refresh/react-refresh-wrap-modules.js");
+const reactRefreshScopedId = require("./react-refresh/babel-plugin-react-refresh-scoped-id.js");
 const { esmHmrPlugin } = require("./react-refresh/rollup-plugin-esm-hmr.js");
 const dinouAssetPlugin = require("./rollup-plugins/dinou-asset-plugin.js");
 const tsconfigPaths = require("rollup-plugin-tsconfig-paths");
 const serverFunctionsPlugin = require("./rollup-plugins/rollup-plugin-server-functions");
 const { regex } = require("../core/asset-extensions.js");
 const manifestGeneratorPlugin = require("./rollup-plugins/manifest-generator-plugin.js");
-
-const isDevelopment = process.env.NODE_ENV !== "production";
-const outputDirectory = isDevelopment ? ".dinou/public" : ".dinou/dist3";
 
 const localDinouPath = path.resolve(process.cwd(), "dinou");
 const isEjected = fs.existsSync(localDinouPath);
@@ -30,6 +28,8 @@ console.log(
 );
 
 module.exports = async function () {
+  const isDevelopment = process.env.NODE_ENV !== "production";
+  const outputDirectory = isDevelopment ? ".dinou/public" : ".dinou/dist3";
   const del = (await import("rollup-plugin-delete")).default;
   const clientConfig = {
     input: isDevelopment
@@ -77,7 +77,22 @@ module.exports = async function () {
       dir: outputDirectory,
       format: "esm",
       entryFileNames: isDevelopment ? "[name].js" : "[name]-[hash].js",
-      chunkFileNames: isDevelopment ? "[name].js" : "[name]-[hash].js",
+      chunkFileNames: (chunkInfo) => {
+        if (!isDevelopment) return "[name]-[hash].js";
+        const moduleIds =
+          chunkInfo.moduleIds || Object.keys(chunkInfo.modules || {});
+        if (moduleIds.length === 0) return "[name].js";
+        const isVendor = moduleIds.every(
+          (id) =>
+            id.includes("node_modules") ||
+            id.includes("\0") ||
+            id.includes("commonjsHelpers")
+        );
+        if (isVendor) {
+          return "[name]-[hash].js";
+        }
+        return "[name].js";
+      },
       // 🛑 THE MAGIC SOLUTION 👇
       // Defaults to 'true' in some cases.
       // By setting it to 'false', you force Rollup to use the original exported
@@ -87,6 +102,8 @@ module.exports = async function () {
     // 🛑 ADD THIS MAGIC LINE
     // Tells Rollup: "Keep entry point signatures (export names) intact"
     preserveEntrySignatures: "strict",
+    perf: isDevelopment,
+    treeshake: isDevelopment ? false : true,
     external: [
       "/refresh.js",
       "/__hmr_client__.js",
@@ -129,8 +146,9 @@ module.exports = async function () {
           "@babel/preset-typescript",
         ],
         plugins: [
-          "babel-plugin-react-compiler",
+          !isDevelopment && "babel-plugin-react-compiler",
           isDevelopment && require.resolve("react-refresh/babel"),
+          isDevelopment && reactRefreshScopedId,
           "@babel/plugin-syntax-import-meta",
         ].filter(Boolean),
         exclude: /node_modules[\\/](?!dinou|react-refresh)/,
@@ -171,13 +189,24 @@ module.exports = async function () {
       serverFunctionsPlugin(),
     ].filter(Boolean),
     watch: {
+      buildDelay: 100,
       exclude: [
-        ".dinou/public/**",
-        ".dinou/react_client_manifest/**",
-        ".dinou/server_functions_manifest/**",
+        /[\\/]node_modules[\\/]/,
+        /[\\/]\.git[\\/]/,
+        /[\\/]\.dinou[\\/]/,
+        /[\\/]test-results[\\/]/,
+        /[\\/]playwright-report[\\/]/,
+        "**/node_modules/**",
+        "**/.git/**",
+        "**/.dinou/**",
+        "**/test-results/**",
+        "**/playwright-report/**",
       ],
     },
     onwarn(warning, warn) {
+      if (warning.code === "CIRCULAR_DEPENDENCY") {
+        return;
+      }
       // Ignore eval warning if it comes from our request-context file
       if (warning.code === "EVAL") {
         // Optional: If you want to be very specific and only allow it in that file:

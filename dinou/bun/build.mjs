@@ -15,6 +15,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const { generateRouteModulesCode } = require("../core/route-generator.js");
 const parseExports = require("../core/parse-exports.js");
 const { useClientRegex, useServerRegex } = require("../constants.js");
+const {
+  isSupportedClientModule,
+  scanProjectDependenciesForClientComponents,
+} = require("../core/scan-dependency-components.js");
 
 const projectRoot = process.cwd();
 const bunDir = path.resolve(projectRoot, ".dinou/bun");
@@ -91,35 +95,6 @@ if (sfManifestPath && fs.existsSync(sfManifestPath)) {
 console.log("🔍 [Dinou Bun] Discovering client components for SSR Engine...");
 const srcDir = path.resolve(projectRoot, "src");
 
-function isSupportedClientModule(filePath, content) {
-  const norm = filePath.replace(/\\/g, "/");
-  // User code and Dinou framework code outside node_modules are always supported
-  if (!norm.includes("node_modules")) {
-    return true;
-  }
-
-  if (content === undefined && fs.existsSync(filePath)) {
-    try {
-      content = fs.readFileSync(filePath, "utf8");
-    } catch (e) {
-      return false;
-    }
-  }
-
-  if (typeof content !== "string") return false;
-
-  // SystemJS bundles (contain System.register) cannot run in ESM environments without the System loader
-  if (content.includes("System.register(") || content.includes("System.registerDynamic(")) {
-    return false;
-  }
-
-  // Legacy UMD/AMD wrappers lacking ES module or CommonJS exports
-  if (content.includes("define.amd") && !content.includes("export ") && !content.includes("module.exports")) {
-    return false;
-  }
-
-  return true;
-}
 
 function findClientComponents() {
   const clientFiles = new Set();
@@ -129,7 +104,6 @@ function findClientComponents() {
     for (const entry of entries) {
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) {
-        if (entry.name === "node_modules" || entry.name === ".git" || entry.name === "tests" || entry.name === "test" || entry.name === "__tests__" || entry.name === "docs") continue;
         walk(full);
       } else if (/\.[jt]sx?$/.test(entry.name)) {
         try {
@@ -153,17 +127,7 @@ function findClientComponents() {
     }
   }
 
-  try {
-    const pkg = JSON.parse(fs.readFileSync(path.resolve(projectRoot, "package.json"), "utf8"));
-    const deps = Object.keys(pkg.dependencies || {});
-    for (const dep of deps) {
-      if (dep === "react" || dep === "react-dom" || dep === "dinou") continue;
-      const depDir = path.resolve(projectRoot, "node_modules", dep);
-      if (fs.existsSync(depDir)) {
-        walk(depDir);
-      }
-    }
-  } catch (e) {}
+  scanProjectDependenciesForClientComponents(projectRoot, clientFiles, useClientRegex);
 
   for (const k of Object.keys(parsedClientManifest)) {
     const fileUrl = k.split("#")[0];
@@ -482,8 +446,9 @@ for (const [k, v] of Object.entries(parsedClientManifest)) {
   const compIndex = clientComponents.findIndex(
     (c) => pathToFileURL(c).href === fileUrl || pathToFileURL(c).href.toLowerCase() === fileUrl.toLowerCase()
   );
-  if (compIndex !== -1 && v && v.id) {
-    addClientModule(v.id, `mod_${compIndex}`);
+  if (compIndex !== -1) {
+    if (v && v.id) addClientModule(v.id, `mod_${compIndex}`);
+    addClientModule(fileUrl, `mod_${compIndex}`);
   }
 }
 
@@ -635,14 +600,16 @@ const ssrEntryContent = `// Auto-generated SSR Engine entry for Bun (Dual-Bundle
 import { renderRscStreamToHtmlStream } from "${dinouDirSlash}/core/edge-ssr.js";
 import { clientModules, ssrConsumerManifest } from "./ssr-client-manifest.js";
 
+const lowerMap = new Map();
 globalThis.__webpack_require__ = (id) => {
   if (clientModules[id]) return clientModules[id];
-  const alt = id.startsWith("file:///c:/")
-    ? id.replace("file:///c:/", "file:///C:/")
-    : id.startsWith("file:///C:/")
-    ? id.replace("file:///C:/", "file:///c:/")
-    : id;
-  if (clientModules[alt]) return clientModules[alt];
+  if (typeof id === "string") {
+    if (lowerMap.size === 0) {
+      for (const k of Object.keys(clientModules)) lowerMap.set(k.toLowerCase(), clientModules[k]);
+    }
+    const lowerVal = lowerMap.get(id.toLowerCase());
+    if (lowerVal) return lowerVal;
+  }
   console.error("[SSR Engine] Module not found in __webpack_require__:", id);
   return {};
 };
@@ -688,6 +655,7 @@ function initStorage() {
 }
 
 const PORT = Number(process.env.PORT || 3000);
+const IDLE_TIMEOUT = Number(process.env.IDLE_TIMEOUT || 120);
 const cwd = typeof process !== "undefined" && typeof process.cwd === "function" ? process.cwd() : ".";
 const dist3Dir = path.resolve(cwd, ".dinou/dist3");
 
@@ -715,6 +683,7 @@ export async function fetch(req) {
 export default {
   port: PORT,
   fetch,
+  idleTimeout: IDLE_TIMEOUT,
 };
 `;
 const bunEntryPath = path.join(bunDir, "bun-entry.js");

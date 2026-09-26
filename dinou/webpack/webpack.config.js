@@ -11,6 +11,10 @@ const ServerFunctionsPlugin = require("./plugins/server-functions-plugin");
 const webpack = require("webpack");
 const { regex } = require("../core/asset-extensions");
 const getCSSEntries = require("./helpers/get-webpack-entries");
+const {
+  scanProjectDependenciesForClientComponents,
+} = require("../core/scan-dependency-components.js");
+const { useClientRegex } = require("../constants.js");
 
 const isDevelopment = process.env.NODE_ENV !== "production";
 const outputDirectory = isDevelopment ? ".dinou/public" : ".dinou/dist3";
@@ -41,6 +45,8 @@ const projectRoot = process.cwd();
 const outputDirs = [
   path.resolve(projectRoot, ".dinou/public"),
   path.resolve(projectRoot, ".dinou/dist3"),
+  path.resolve(projectRoot, "out"),
+  path.resolve(projectRoot, "dist"),
 ];
 
 function cleanDir(dir) {
@@ -65,6 +71,13 @@ module.exports = async () => {
   // 🔥 CLEAN HARD
   cleanDir(outputDir);
   const [cssEntries] = await getCSSEntries();
+
+  const dependencyClientFiles = new Set();
+  scanProjectDependenciesForClientComponents(
+    process.cwd(),
+    dependencyClientFiles,
+    useClientRegex
+  );
 
   let clientDone = false;
   let serverDone = false;
@@ -95,6 +108,9 @@ module.exports = async () => {
     },
     cache: false,
     mode: isDevelopment ? "development" : "production",
+    ignoreWarnings: [
+      /from "autoprefixer" plugin/,
+    ],
     entry: {
       main: [path.resolve(__dirname, "../core/client-webpack.jsx")].filter(
         Boolean,
@@ -140,6 +156,7 @@ module.exports = async () => {
       rules: [
         {
           test: /\.[jt]sx?$/,
+          type: "javascript/auto",
           exclude: [/[\\/]node_modules[\\/](?!dinou)/, ...outputDirs],
           use: [
             {
@@ -225,7 +242,22 @@ module.exports = async () => {
       ],
     },
     plugins: [
-      new ReactServerWebpackPlugin({ isServer: false }),
+      new ReactServerWebpackPlugin({
+        isServer: false,
+        clientReferences: [
+          {
+            directory: "./src",
+            recursive: true,
+            include: /\.(js|ts|jsx|tsx)$/,
+          },
+          {
+            directory: path.resolve(__dirname, "../core"),
+            recursive: false,
+            include: /\.(js|ts|jsx|tsx)$/,
+          },
+          ...Array.from(dependencyClientFiles),
+        ],
+      }),
       isDevelopment && {
         apply(compiler) {
           compiler.hooks.thisCompilation.tap(
@@ -347,7 +379,13 @@ module.exports = async () => {
       },
     },
     watchOptions: {
-      ignored: outputDirs.map((dir) => `${dir}/**`),
+      ignored: [
+        "**/node_modules/**",
+        "**/.git/**",
+        "**/.dinou/node-dev/**",
+        "**/.dinou/dist2/**",
+        ...outputDirs.map((dir) => `${dir}/**`),
+      ],
     },
     stats: "normal", // or 'verbose' in dev
     infrastructureLogging: {

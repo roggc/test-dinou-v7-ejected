@@ -11,15 +11,28 @@ import { pathToFileURL } from "node:url";
 import resolve from "resolve";
 import createPostCSSExtractPlugin from "../plugins-postcss/postcss-extract-plugin.js";
 
-export default function cssProcessorPlugin({ outdir = ".dinou/public" } = {}) {
+export default function cssProcessorPlugin({ outdir = ".dinou/public", hmrEngine } = {}) {
   const { finalize, plugin: extractor } = createPostCSSExtractPlugin({
     outputFile: `${outdir}/styles.css`,
   });
 
+  let isInitial = true;
+  let hasCssChange = false;
+  let postCssTotalTime = 0;
+  let postCssCount = 0;
+
   return {
     name: "css-processor",
     setup(build) {
+      build.onStart(() => {
+        hasCssChange = false;
+        postCssTotalTime = 0;
+        postCssCount = 0;
+      });
+
       build.onLoad({ filter: /\.css$/ }, async (args) => {
+        hasCssChange = true;
+        const tPostCss0 = Date.now();
         const filePath = args.path;
         const source = await fs.readFile(filePath, "utf8");
 
@@ -61,6 +74,11 @@ export default function cssProcessorPlugin({ outdir = ".dinou/public" } = {}) {
           extractor,
         ]).process(source, { from: filePath });
 
+        postCssTotalTime += Date.now() - tPostCss0;
+        postCssCount++;
+        globalThis.__DINOU_POSTCSS_TIME__ = postCssTotalTime;
+        globalThis.__DINOU_POSTCSS_COUNT__ = postCssCount;
+
         if (filePath.endsWith(".module.css")) {
           // console.log(`[CSS MODULE] ${path.basename(filePath)} →`, map);
           return {
@@ -76,6 +94,13 @@ export default function cssProcessorPlugin({ outdir = ".dinou/public" } = {}) {
       });
       build.onEnd(() => {
         finalize();
+        globalThis.__DINOU_POSTCSS_TIME__ = postCssTotalTime;
+        globalThis.__DINOU_POSTCSS_COUNT__ = postCssCount;
+        if (!isInitial && hasCssChange && hmrEngine?.value?.broadcastMessage) {
+          hmrEngine.value.broadcastMessage({ type: "style-update", url: "/styles.css" });
+        }
+        isInitial = false;
+        hasCssChange = false;
       });
     },
   };

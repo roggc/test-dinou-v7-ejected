@@ -14,6 +14,12 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const { generateRouteModulesCode } = require("../core/route-generator.js");
 const parseExports = require("../core/parse-exports.js");
 const { useClientRegex, useServerRegex } = require("../constants.js");
+const createScopedName = require("../core/createScopedName.js");
+const { regex: assetRegex } = require("../core/asset-extensions.js");
+const {
+  isSupportedClientModule,
+  scanProjectDependenciesForClientComponents,
+} = require("../core/scan-dependency-components.js");
 
 export async function bundleDualEngine(options = {}) {
   const isDev = Boolean(options.isDev);
@@ -88,21 +94,6 @@ export async function bundleDualEngine(options = {}) {
   // 3. Client components discovery
   const srcDir = path.resolve(projectRoot, "src");
 
-  function isSupportedClientModule(filePath, content) {
-    const norm = filePath.replace(/\\/g, "/");
-    if (!norm.includes("node_modules")) return true;
-    if (content === undefined && fs.existsSync(filePath)) {
-      try {
-        content = fs.readFileSync(filePath, "utf8");
-      } catch (e) {
-        return false;
-      }
-    }
-    if (typeof content !== "string") return false;
-    if (content.includes("System.register(") || content.includes("System.registerDynamic(")) return false;
-    if (content.includes("define.amd") && !content.includes("export ") && !content.includes("module.exports")) return false;
-    return true;
-  }
 
   function findClientComponents() {
     const clientFiles = new Set();
@@ -112,15 +103,6 @@ export async function bundleDualEngine(options = {}) {
       for (const entry of entries) {
         const full = path.join(dir, entry.name);
         if (entry.isDirectory()) {
-          if (
-            entry.name === "node_modules" ||
-            entry.name === ".git" ||
-            entry.name === "tests" ||
-            entry.name === "test" ||
-            entry.name === "__tests__" ||
-            entry.name === "docs"
-          )
-            continue;
           walk(full);
         } else if (/\.[jt]sx?$/.test(entry.name)) {
           try {
@@ -144,17 +126,7 @@ export async function bundleDualEngine(options = {}) {
       }
     }
 
-    try {
-      const pkg = JSON.parse(fs.readFileSync(path.resolve(projectRoot, "package.json"), "utf8"));
-      const deps = Object.keys(pkg.dependencies || {});
-      for (const dep of deps) {
-        if (dep === "react" || dep === "react-dom" || dep === "dinou") continue;
-        const depDir = path.resolve(projectRoot, "node_modules", dep);
-        if (fs.existsSync(depDir)) {
-          walk(depDir);
-        }
-      }
-    } catch (e) {}
+    scanProjectDependenciesForClientComponents(projectRoot, clientFiles, useClientRegex);
 
     for (const k of Object.keys(parsedClientManifest)) {
       const fileUrl = k.split("#")[0];
@@ -472,8 +444,9 @@ globalThis.__DINOU_VFS__ = ${JSON.stringify(vfsSnapshot)};
     const compIndex = clientComponents.findIndex(
       (c) => pathToFileURL(c).href === fileUrl || pathToFileURL(c).href.toLowerCase() === fileUrl.toLowerCase()
     );
-    if (compIndex !== -1 && v && v.id) {
-      addClientModule(v.id, `mod_${compIndex}`);
+    if (compIndex !== -1) {
+      if (v && v.id) addClientModule(v.id, `mod_${compIndex}`);
+      addClientModule(fileUrl, `mod_${compIndex}`);
     }
   }
 
@@ -632,14 +605,16 @@ export { buildStaticPages, getStaticPaths } from "${dinouDirSlash}/core/build-st
 import { renderRscStreamToHtmlStream } from "${dinouDirSlash}/core/edge-ssr.js";
 import { clientModules, ssrConsumerManifest } from "./ssr-client-manifest.mjs";
 
+const lowerMap = new Map();
 globalThis.__webpack_require__ = (id) => {
   if (clientModules[id]) return clientModules[id];
-  const alt = id.startsWith("file:///c:/")
-    ? id.replace("file:///c:/", "file:///C:/")
-    : id.startsWith("file:///C:/")
-    ? id.replace("file:///C:/", "file:///c:/")
-    : id;
-  if (clientModules[alt]) return clientModules[alt];
+  if (typeof id === "string") {
+    if (lowerMap.size === 0) {
+      for (const k of Object.keys(clientModules)) lowerMap.set(k.toLowerCase(), clientModules[k]);
+    }
+    const lowerVal = lowerMap.get(id.toLowerCase());
+    if (lowerVal) return lowerVal;
+  }
   console.error("[SSR Engine] Module not found in __webpack_require__:", id);
   return {};
 };
@@ -672,9 +647,36 @@ export async function renderHtml(rscStream, options = {}) {
   };
   const commonLoader = {
     ".js": "jsx", ".jsx": "jsx", ".ts": "ts", ".tsx": "tsx",
-    ".json": "json", ".css": "empty", ".svg": "dataurl",
-    ".png": "dataurl", ".jpg": "dataurl", ".jpeg": "dataurl",
-    ".webp": "dataurl", ".ico": "dataurl",
+    ".json": "json", ".css": "empty",
+  };
+
+  const serverAssetPlugin = {
+    name: "dinou-server-asset-plugin",
+    setup(build) {
+      build.onResolve({ filter: assetRegex }, (args) => {
+        let resolvedPath;
+        if (args.path.startsWith("@/")) {
+          resolvedPath = path.resolve(projectRoot, "src", args.path.slice(2));
+        } else if (path.isAbsolute(args.path)) {
+          resolvedPath = args.path;
+        } else {
+          resolvedPath = path.resolve(args.resolveDir, args.path);
+        }
+        return { path: resolvedPath, namespace: "dinou-server-asset" };
+      });
+
+      build.onLoad({ filter: /.*/, namespace: "dinou-server-asset" }, (args) => {
+        const ext = path.extname(args.path);
+        const base = path.basename(args.path, ext);
+        const scoped = createScopedName(base, args.path);
+        const assetUrl = `/assets/${scoped}${ext}`;
+
+        return {
+          contents: `export default ${JSON.stringify(assetUrl)};`,
+          loader: "js",
+        };
+      });
+    },
   };
 
   const banner = {
@@ -861,7 +863,7 @@ var __webpack_chunk_load__ = function(chunkId) {
     conditions: ["node", "worker", "react-server"],
     external: externalList,
     banner,
-    plugins: [clientReferencesPlugin, serverReferencesPlugin],
+    plugins: [clientReferencesPlugin, serverReferencesPlugin, serverAssetPlugin],
     alias: commonAlias,
     loader: commonLoader,
     jsx: "automatic",
@@ -885,7 +887,7 @@ var __webpack_chunk_load__ = function(chunkId) {
     conditions: ["node", "worker", "browser"],
     external: externalList,
     banner,
-    plugins: [serverReferencesPluginSsr],
+    plugins: [serverReferencesPluginSsr, serverAssetPlugin],
     alias: commonAlias,
     loader: commonLoader,
     jsx: "automatic",

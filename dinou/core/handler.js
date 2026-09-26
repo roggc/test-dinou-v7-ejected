@@ -1111,7 +1111,8 @@ async function handleRequest(request, platformContext = {}) {
           regenerating.add(reqPath);
           try {
             console.log(`[Edge ISR] Starting regeneration for ${reqPath}...`);
-            const context = createRequestContext(simReq, bridge, platformContext);
+            const revalBridge = new WebResponseBridge();
+            const context = createRequestContext(simReq, revalBridge, platformContext);
             const isNotFound = {};
             let jsx;
             await requestStorage.run(context, async () => {
@@ -1189,9 +1190,9 @@ async function handleRequest(request, platformContext = {}) {
       return new Response("Not Found", { status: 404 });
     }
 
-    // Concurrency Stampede Protection
-    const inFlightKey = simReq.url || reqPath;
-    let isgPromise = inFlightGenerations.get(inFlightKey);
+    // Concurrency Stampede Protection (Production only, never share dynamic streams in dev)
+    const inFlightKey = !isDevelopment ? (simReq.url || reqPath) : null;
+    let isgPromise = inFlightKey ? inFlightGenerations.get(inFlightKey) : null;
     if (!isgPromise) {
       isgPromise = (async () => {
         console.log(`[Edge ISG] Processing page for ${reqPath}...`);
@@ -1318,23 +1319,28 @@ async function handleRequest(request, platformContext = {}) {
 
           const bootstrapModules = isDevelopment
             ? [
-                clientEntry,
                 isWebpack ? undefined : getAssetFromManifest("runtime.js"),
+                clientEntry,
               ].filter(Boolean)
             : [clientEntry];
 
           if (isDevelopment && !isWebpack) {
-            bootstrapScriptContent += `window.HMR_WEBSOCKET_URL="ws://localhost:3001";\n`;
+            const hmrPort = process.env.HMR_PORT || (Number(process.env.PORT || 3000) + 1);
+            bootstrapScriptContent += `window.$RefreshReg$ = window.$RefreshReg$ || function() {};\n`;
+            bootstrapScriptContent += `window.$RefreshSig$ = window.$RefreshSig$ || function() { return function(type) { return type; }; };\n`;
+            bootstrapScriptContent += `window.HMR_WEBSOCKET_URL="ws://localhost:${hmrPort}";\n`;
           }
 
           let htmlStream;
           try {
-            htmlStream = await platformContext.renderHtmlStream(streamForSsr, {
-              bootstrapModules,
-              bootstrapScriptContent,
-              onError(err) {
-                console.error("[Edge Native SSR] Stream error:", err);
-              },
+            await requestStorage.run(context, async () => {
+              htmlStream = await platformContext.renderHtmlStream(streamForSsr, {
+                bootstrapModules,
+                bootstrapScriptContent,
+                onError(err) {
+                  console.error("[Edge Native SSR] Stream error:", err);
+                },
+              });
             });
           } catch (ssrErr) {
             console.error("[Edge Native SSR] SSR render threw error, falling back to getErrorJSX:", ssrErr.message);
@@ -1377,8 +1383,8 @@ async function handleRequest(request, platformContext = {}) {
             const errorClientEntry = getAssetFromManifest("error.js");
             const errorBootstrapModules = isDevelopment
               ? [
-                  errorClientEntry,
                   isWebpack ? undefined : getAssetFromManifest("runtime.js"),
+                  errorClientEntry,
                 ].filter(Boolean)
               : [errorClientEntry];
 
@@ -1388,15 +1394,20 @@ async function handleRequest(request, platformContext = {}) {
             )};window.__DINOU_ERROR_NAME__=${JSON.stringify(serializedError.name)};\n`;
             errorBootstrapScript += 'document.body.setAttribute("data-hydrated", "true");\n';
             if (isDevelopment && !isWebpack) {
-              errorBootstrapScript += `window.HMR_WEBSOCKET_URL="ws://localhost:3001";\n`;
+              const hmrPort = process.env.HMR_PORT || (Number(process.env.PORT || 3000) + 1);
+              errorBootstrapScript += `window.$RefreshReg$ = window.$RefreshReg$ || function() {};\n`;
+              errorBootstrapScript += `window.$RefreshSig$ = window.$RefreshSig$ || function() { return function(type) { return type; }; };\n`;
+              errorBootstrapScript += `window.HMR_WEBSOCKET_URL="ws://localhost:${hmrPort}";\n`;
             }
 
-            htmlStream = await platformContext.renderHtmlStream(errorRscStream, {
-              bootstrapModules: errorBootstrapModules,
-              bootstrapScriptContent: errorBootstrapScript,
-              onError(err) {
-                console.error("[Edge Native SSR Error Page] Stream error:", err);
-              },
+            await requestStorage.run(context, async () => {
+              htmlStream = await platformContext.renderHtmlStream(errorRscStream, {
+                bootstrapModules: errorBootstrapModules,
+                bootstrapScriptContent: errorBootstrapScript,
+                onError(err) {
+                  console.error("[Edge Native SSR Error Page] Stream error:", err);
+                },
+              });
             });
           }
 
@@ -1464,7 +1475,9 @@ async function handleRequest(request, platformContext = {}) {
         );
       })();
 
-      inFlightGenerations.set(inFlightKey, isgPromise);
+      if (inFlightKey) {
+        inFlightGenerations.set(inFlightKey, isgPromise);
+      }
     }
 
     try {
@@ -1511,7 +1524,9 @@ async function handleRequest(request, platformContext = {}) {
       bridge.end(result.html);
       return bridge.toResponse();
     } finally {
-      inFlightGenerations.delete(inFlightKey);
+      if (inFlightKey) {
+        inFlightGenerations.delete(inFlightKey);
+      }
     }
   }
 
