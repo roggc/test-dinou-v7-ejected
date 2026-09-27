@@ -18,6 +18,10 @@ import {
   showIdleStatus,
   printReadyBanner,
 } from "./terminal-status.mjs";
+import { resolveDevPorts } from "./port-selector.mjs";
+
+// Resolve dev HTTP and HMR ports before initiating background compilation
+const { port: PORT, hmrPort: HMR_PORT } = await resolveDevPorts();
 
 const devStartTime = Date.now();
 const devTimings = {};
@@ -644,6 +648,25 @@ function getCachedExports(filePath, code) {
   return entry.exports;
 }
 
+// Transform & File Content Cache for Server Plugins (mtimeMs based)
+const fileTransformCache = new Map();
+
+function getCachedFileTransform(filePath, type, transformFn) {
+  try {
+    const stats = fs.statSync(filePath);
+    const key = `${filePath}::${type}`;
+    const cached = fileTransformCache.get(key);
+    if (cached && cached.mtime === stats.mtimeMs) {
+      return cached.result;
+    }
+    const result = transformFn();
+    fileTransformCache.set(key, { mtime: stats.mtimeMs, result });
+    return result;
+  } catch (e) {
+    return transformFn();
+  }
+}
+
 // Plugins
 const clientReferencesPlugin = {
   name: "dinou-client-references",
@@ -664,28 +687,30 @@ const clientReferencesPlugin = {
       const normalizedPath = args.path.replace(/\\/g, "/");
       if (normalizedPath.includes("dinou/core/navigation")) return null;
 
-      let code;
-      try { code = fs.readFileSync(args.path, "utf8"); } catch (e) { return null; }
-      if (!isSupportedClientModule(args.path, code)) return null;
-      if (!useClientRegex.test(code.trim())) return null;
+      return getCachedFileTransform(args.path, "client-proxy", () => {
+        let code;
+        try { code = fs.readFileSync(args.path, "utf8"); } catch (e) { return null; }
+        if (!isSupportedClientModule(args.path, code)) return null;
+        if (!useClientRegex.test(code.trim())) return null;
 
-      const exports = getCachedExports(args.path, code);
-      const absPath = path.resolve(args.path);
-      const fileUrl = pathToFileURL(absPath).href;
+        const exports = getCachedExports(args.path, code);
+        const absPath = path.resolve(args.path);
+        const fileUrl = pathToFileURL(absPath).href;
 
-      let proxyCode = `import { createClientModuleProxy } from "react-server-dom-webpack/server.edge";\n`;
-      proxyCode += `const proxy = createClientModuleProxy(${JSON.stringify(fileUrl)});\n`;
-      for (const name of exports) {
-        if (name === "default") {
-          proxyCode += `export default proxy.default;\n`;
-        } else {
-          proxyCode += `export const ${name} = proxy[${JSON.stringify(name)}];\n`;
+        let proxyCode = `import { createClientModuleProxy } from "react-server-dom-webpack/server.edge";\n`;
+        proxyCode += `const proxy = createClientModuleProxy(${JSON.stringify(fileUrl)});\n`;
+        for (const name of exports) {
+          if (name === "default") {
+            proxyCode += `export default proxy.default;\n`;
+          } else {
+            proxyCode += `export const ${name} = proxy[${JSON.stringify(name)}];\n`;
+          }
         }
-      }
-      if (!exports.includes("default")) {
-        proxyCode += `export default proxy.default;\n`;
-      }
-      return { contents: proxyCode, loader: "js" };
+        if (!exports.includes("default")) {
+          proxyCode += `export default proxy.default;\n`;
+        }
+        return { contents: proxyCode, loader: "js" };
+      });
     });
   },
 };
@@ -695,24 +720,27 @@ const serverReferencesPlugin = {
   setup(build) {
     build.onLoad({ filter: /\.[jt]sx?$/ }, async (args) => {
       if (args.path.includes("node_modules")) return null;
-      let code;
-      try { code = fs.readFileSync(args.path, "utf8"); } catch (e) { return null; }
-      if (!useServerRegex.test(code.trim())) return null;
 
-      const exports = getCachedExports(args.path, code);
-      const absPath = path.resolve(args.path);
-      const relPath = path.relative(projectRoot, absPath).replace(/\\/g, "/");
-      const relativeFileUrl = "file:///" + relPath;
+      return getCachedFileTransform(args.path, "server-ref-rsc", () => {
+        let code;
+        try { code = fs.readFileSync(args.path, "utf8"); } catch (e) { return null; }
+        if (!useServerRegex.test(code.trim())) return null;
 
-      let transformed = code + "\n\n";
-      transformed += `import { registerServerReference } from "react-server-dom-webpack/server.edge";\n`;
-      for (const name of exports) {
-        if (name !== "default") {
-          transformed += `registerServerReference(${name}, ${JSON.stringify(relativeFileUrl)}, ${JSON.stringify(name)});\n`;
+        const exports = getCachedExports(args.path, code);
+        const absPath = path.resolve(args.path);
+        const relPath = path.relative(projectRoot, absPath).replace(/\\/g, "/");
+        const relativeFileUrl = "file:///" + relPath;
+
+        let transformed = code + "\n\n";
+        transformed += `import { registerServerReference } from "react-server-dom-webpack/server.edge";\n`;
+        for (const name of exports) {
+          if (name !== "default") {
+            transformed += `registerServerReference(${name}, ${JSON.stringify(relativeFileUrl)}, ${JSON.stringify(name)});\n`;
+          }
         }
-      }
-      const ext = path.extname(args.path);
-      return { contents: transformed, loader: ext === ".ts" ? "ts" : ext === ".tsx" ? "tsx" : ext === ".jsx" ? "jsx" : "js" };
+        const ext = path.extname(args.path);
+        return { contents: transformed, loader: ext === ".ts" ? "ts" : ext === ".tsx" ? "tsx" : ext === ".jsx" ? "jsx" : "js" };
+      });
     });
   },
 };
@@ -722,25 +750,28 @@ const serverReferencesPluginSsr = {
   setup(build) {
     build.onLoad({ filter: /\.[jt]sx?$/ }, async (args) => {
       if (args.path.includes("node_modules")) return null;
-      let code;
-      try { code = fs.readFileSync(args.path, "utf8"); } catch (e) { return null; }
-      if (!useServerRegex.test(code.trim())) return null;
 
-      const exports = getCachedExports(args.path, code);
-      const absPath = path.resolve(args.path);
-      const relPath = path.relative(projectRoot, absPath).replace(/\\/g, "/");
-      const relativeFileUrl = "file:///" + relPath;
+      return getCachedFileTransform(args.path, "server-ref-ssr", () => {
+        let code;
+        try { code = fs.readFileSync(args.path, "utf8"); } catch (e) { return null; }
+        if (!useServerRegex.test(code.trim())) return null;
 
-      let transformed = code + "\n\n";
-      transformed += `import { registerServerReference } from "react-server-dom-webpack/client.edge";\n`;
-      for (const name of exports) {
-        if (name !== "default") {
-          transformed += `registerServerReference(${name}, ${JSON.stringify(relativeFileUrl + "#" + name)});\n`;
-          transformed += `registerServerReference(${name}, ${JSON.stringify(pathToFileURL(absPath).href + "#" + name)});\n`;
+        const exports = getCachedExports(args.path, code);
+        const absPath = path.resolve(args.path);
+        const relPath = path.relative(projectRoot, absPath).replace(/\\/g, "/");
+        const relativeFileUrl = "file:///" + relPath;
+
+        let transformed = code + "\n\n";
+        transformed += `import { registerServerReference } from "react-server-dom-webpack/client.edge";\n`;
+        for (const name of exports) {
+          if (name !== "default") {
+            transformed += `registerServerReference(${name}, ${JSON.stringify(relativeFileUrl + "#" + name)});\n`;
+            transformed += `registerServerReference(${name}, ${JSON.stringify(pathToFileURL(absPath).href + "#" + name)});\n`;
+          }
         }
-      }
-      const ext = path.extname(args.path);
-      return { contents: transformed, loader: ext === ".ts" ? "ts" : ext === ".tsx" ? "tsx" : ext === ".jsx" ? "jsx" : "js" };
+        const ext = path.extname(args.path);
+        return { contents: transformed, loader: ext === ".ts" ? "ts" : ext === ".tsx" ? "tsx" : ext === ".jsx" ? "jsx" : "js" };
+      });
     });
   },
 };
@@ -759,6 +790,7 @@ const externalList = [...nodeBuiltins, ...nodeBuiltins.map((b) => "node:" + b)];
 
 const commonAlias = {
   "@": path.resolve(projectRoot, "src"),
+  "dinou/config": path.resolve(dinouDir, "core/config.js"),
   dinou: dinouDir,
 };
 const commonLoader = {
@@ -817,6 +849,78 @@ const serverAssetPlugin = {
   },
 };
 
+const resolvePkgCache = new Map();
+
+function createDevExternalPackagesPlugin(isRsc = true) {
+  return {
+    name: `dinou-dev-external-packages-${isRsc ? "rsc" : "ssr"}`,
+    setup(build) {
+      build.onResolve({ filter: /^[^.\/]|^\.[^.\/]/ }, async (args) => {
+        // 1. Windows or Unix absolute paths
+        if (path.isAbsolute(args.path) || /^[a-zA-Z]:[\\\/]/.test(args.path)) {
+          return null;
+        }
+        // 2. Relative paths or leading slashes
+        if (args.path.startsWith(".") || args.path.startsWith("/") || args.path.startsWith("\\")) {
+          return null;
+        }
+        // 3. Virtual modules
+        if (args.path.startsWith("\0") || args.path.startsWith("virtual:")) {
+          return null;
+        }
+        // 4. Aliases
+        if (args.path.startsWith("@/") || args.path === "@") {
+          return null;
+        }
+        if (args.path === "dinou" || args.path.startsWith("dinou/")) {
+          return null;
+        }
+        // 5. In RSC (ctxA), React packages must remain bundled to preserve react-server condition.
+        // In SSR (ctxB), React packages MUST be external so client components and the renderer share the same React singleton!
+        if (isRsc) {
+          if (
+            args.path === "react" ||
+            args.path.startsWith("react/") ||
+            args.path === "react-dom" ||
+            args.path.startsWith("react-dom/") ||
+            args.path === "react-server-dom-webpack" ||
+            args.path.startsWith("react-server-dom-webpack/") ||
+            args.path === "@roggc/react-server-dom-esm" ||
+            args.path.startsWith("@roggc/react-server-dom-esm/")
+          ) {
+            return null;
+          }
+        }
+        // 6. CSS / Stylesheets (handled by esbuild empty loader)
+        if (/\.(css|scss|sass|less)$/i.test(args.path)) {
+          return null;
+        }
+        // 7. Client components from node_modules:
+        // In RSC (ctxA), client components need to be intercepted by clientReferencesPlugin to create the proxy.
+        if (isRsc) {
+          try {
+            const cacheKey = `${args.path}::${args.resolveDir || projectRoot}`;
+            let resolved = resolvePkgCache.get(cacheKey);
+            if (resolved === undefined) {
+              try {
+                resolved = require.resolve(args.path, { paths: [args.resolveDir || projectRoot] });
+              } catch (e) {
+                resolved = null;
+              }
+              resolvePkgCache.set(cacheKey, resolved);
+            }
+            if (resolved && knownClientFiles && knownClientFiles.has(path.resolve(resolved))) {
+              return null;
+            }
+          } catch (e) {}
+        }
+
+        return { path: args.path, external: true };
+      });
+    },
+  };
+}
+
 const banner = {
   js: `import { createRequire as ___createRequire } from 'node:module';
 import { AsyncLocalStorage as ___AsyncLocalStorage } from 'node:async_hooks';
@@ -863,8 +967,11 @@ const rscOutfile = path.join(devDir, "rsc-engine.mjs");
 const ssrOutfile = path.join(devDir, "ssr-engine.mjs");
 
 const ctxA = await esbuild.context({
-  entryPoints: [path.join(devDir, "rsc-entry.mjs")],
-  outfile: rscOutfile,
+  entryPoints: { "rsc-engine": path.join(devDir, "rsc-entry.mjs") },
+  outdir: devDir,
+  splitting: true,
+  outExtension: { ".js": ".mjs" },
+  chunkNames: "chunks/rsc/[name]-[hash]",
   bundle: true,
   format: "esm",
   target: "node20",
@@ -873,7 +980,7 @@ const ctxA = await esbuild.context({
   conditions: ["node", "worker", "react-server"],
   external: externalList,
   banner,
-  plugins: [clientReferencesPlugin, serverReferencesPlugin, serverAssetPlugin],
+  plugins: [clientReferencesPlugin, serverReferencesPlugin, serverAssetPlugin, createDevExternalPackagesPlugin(true)],
   alias: commonAlias,
   loader: commonLoader,
   jsx: "automatic",
@@ -887,8 +994,11 @@ const ctxA = await esbuild.context({
 });
 
 const ctxB = await esbuild.context({
-  entryPoints: [path.join(devDir, "ssr-entry.mjs")],
-  outfile: ssrOutfile,
+  entryPoints: { "ssr-engine": path.join(devDir, "ssr-entry.mjs") },
+  outdir: devDir,
+  splitting: true,
+  outExtension: { ".js": ".mjs" },
+  chunkNames: "chunks/ssr/[name]-[hash]",
   bundle: true,
   format: "esm",
   target: "node20",
@@ -897,7 +1007,7 @@ const ctxB = await esbuild.context({
   conditions: ["node", "worker", "browser"],
   external: externalList,
   banner,
-  plugins: [serverReferencesPluginSsr, serverAssetPlugin],
+  plugins: [serverReferencesPluginSsr, serverAssetPlugin, createDevExternalPackagesPlugin(false)],
   alias: commonAlias,
   loader: commonLoader,
   jsx: "automatic",
@@ -914,6 +1024,7 @@ let rscModule = null;
 let ssrModule = null;
 let engineVersion = 1;
 let activeRebuildPromise = null;
+let activeSsrSyncPromise = null;
 
 async function doInitialBuild() {
   const tBuild0 = Date.now();
@@ -1030,9 +1141,6 @@ async function doRebuild(filePath = "", eventType = "change") {
     logTimeline(`doRebuild executing for ${baseName}`);
     startSpinner(`Recompiling changes in ${baseName}...`);
 
-    if (clientBundlerHandle?.notifyFileChanged && absFilePath) {
-      clientBundlerHandle.notifyFileChanged(absFilePath);
-    }
     const normLower = absFilePath.toLowerCase();
     const isCssFile = normLower.endsWith(".css") || normLower.endsWith(".scss") || normLower.endsWith(".less");
     let isClientFile = false;
@@ -1052,6 +1160,11 @@ async function doRebuild(filePath = "", eventType = "change") {
     const wasServerFile = absFilePath ? knownServerFiles.has(absFilePath) : false;
     const serverDirectiveChanged = isServerFile !== wasServerFile;
 
+    const isClientRelevant = isClientFile || wasClientFile || clientDirectiveChanged || isCssFile;
+    if (clientBundlerHandle?.notifyFileChanged && absFilePath && isClientRelevant) {
+      clientBundlerHandle.notifyFileChanged(absFilePath);
+    }
+
     const needsClientBundlerRestart = clientDirectiveChanged || (isStructureChange && isCssFile);
 
     if (needsClientBundlerRestart && clientBundlerHandle?.restart) {
@@ -1068,6 +1181,18 @@ async function doRebuild(filePath = "", eventType = "change") {
       updateManifestsState();
       generateEntryFiles();
       await Promise.all([ctxA.rebuild(), ctxB.rebuild()]);
+      engineVersion = Date.now();
+      const v = "?v=" + engineVersion;
+      rscModule = await dynamicImportWithRetry(pathToFileURL(rscOutfile).href + v);
+      ssrModule = await dynamicImportWithRetry(pathToFileURL(ssrOutfile).href + v);
+      logTimeline(`SSR module imported into V8 runtime`);
+      logSuccess(`Rebuilt in ${Date.now() - t0}ms (${eventType} ${baseName})`);
+      if (activeClientBuildPromise) {
+        await activeClientBuildPromise;
+      }
+      if (!isCssFile) {
+        await broadcastToClients({ type: "reload" });
+      }
     } else if (isClientFile) {
       if (activeClientBuildPromise) {
         logTimeline(`Prioritizing client HMR broadcast before SSR update...`);
@@ -1078,30 +1203,35 @@ async function doRebuild(filePath = "", eventType = "change") {
           await activeClientBuildPromise;
         }
       }
-      logTimeline(`ctxB (SSR Engine) background rebuild starting...`);
-      const tB = Date.now();
-      await ctxB.rebuild();
-      logTimeline(`ctxB (SSR Engine) rebuilt in ${Date.now() - tB}ms`);
+      logSuccess(`Rebuilt in ${Date.now() - t0}ms (${eventType} ${baseName})`);
+      // Rebuild SSR engine asynchronously in the background so client HMR is instant
+      const ssrSync = (async () => {
+        try {
+          const tB = Date.now();
+          await ctxB.rebuild();
+          logTimeline(`ctxB (SSR Engine) rebuilt in ${Date.now() - tB}ms`);
+          const v = "?v=" + Date.now();
+          ssrModule = await dynamicImportWithRetry(pathToFileURL(ssrOutfile).href + v);
+          logTimeline(`SSR module imported into V8 runtime`);
+        } catch (err) {
+          console.error("❌ [SSR Engine Rebuild Error]:", err);
+        }
+      })();
+      activeSsrSyncPromise = ssrSync;
+      ssrSync.finally(() => {
+        if (activeSsrSyncPromise === ssrSync) activeSsrSyncPromise = null;
+      });
     } else {
       await ctxA.rebuild();
-    }
-
-    engineVersion = Date.now();
-    const v = "?v=" + engineVersion;
-    if (needsStructureRebuild || !isClientFile) {
+      engineVersion = Date.now();
+      const v = "?v=" + engineVersion;
       rscModule = await dynamicImportWithRetry(pathToFileURL(rscOutfile).href + v);
-    }
-    if (needsStructureRebuild || isClientFile) {
-      ssrModule = await dynamicImportWithRetry(pathToFileURL(ssrOutfile).href + v);
-    }
-    logTimeline(`SSR module imported into V8 runtime`);
-    logSuccess(`Rebuilt in ${Date.now() - t0}ms (${eventType} ${baseName})`);
-    if (!isClientFile) {
+      logSuccess(`Rebuilt in ${Date.now() - t0}ms (${eventType} ${baseName})`);
       if (activeClientBuildPromise) {
         await activeClientBuildPromise;
       }
       if (!isCssFile) {
-        await broadcastToClients({ type: "reload" });
+        await broadcastToClients({ type: "rsc-update", path: absFilePath || filePath });
       }
     }
   } catch (err) {
@@ -1145,8 +1275,8 @@ const srcWatcher = chokidar.watch(srcDir, {
   ignoreInitial: true,
   ignored: [/node_modules/, /\.git/],
   awaitWriteFinish: {
-    stabilityThreshold: 60,
-    pollInterval: 20,
+    stabilityThreshold: 20,
+    pollInterval: 10,
   },
 });
 
@@ -1163,7 +1293,7 @@ srcWatcher.on("all", (event, fullPath) => {
     srcDebounce = null;
     logTimeline(`Debounce timer fired, triggering rebuild...`);
     triggerRebuild(pendingSrcPath, pendingSrcEvent);
-  }, 40);
+  }, 15);
 });
 
 // Watch manifest folder for client bundler output
@@ -1472,8 +1602,6 @@ async function startClientBundler(tool) {
 }
 
 // HTTP Server
-const PORT = Number(process.env.PORT || 3000);
-
 const server = http.createServer(async (req, res) => {
   try {
     if (clientBundlerPromise) {
@@ -1481,6 +1609,9 @@ const server = http.createServer(async (req, res) => {
     }
     if (activeClientBuildPromise) {
       await activeClientBuildPromise;
+    }
+    if (activeSsrSyncPromise) {
+      await activeSsrSyncPromise;
     }
     // If a source change is pending debounce, process it
     if (srcDebounce) {
@@ -1525,7 +1656,6 @@ const server = http.createServer(async (req, res) => {
         if (memBuf) {
           const fileExt = path.extname(cleanPath).toLowerCase();
           const contentType = MIME_TYPES[fileExt] || "application/octet-stream";
-          logTimeline(`⚡ [MEM CACHE] HTTP served ${pathname} (${memBuf.length} bytes)`);
           res.statusCode = 200;
           res.setHeader("content-type", contentType);
           res.setHeader("content-length", String(memBuf.length));
@@ -1606,7 +1736,6 @@ const server = http.createServer(async (req, res) => {
           }
 
           if (buf !== null) {
-            logTimeline(`🌐 HTTP served ${pathname} (${buf.length} bytes)`);
             res.statusCode = 200;
             res.setHeader("content-type", contentType);
             res.setHeader("content-length", String(buf.length));
