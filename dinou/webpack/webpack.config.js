@@ -14,6 +14,7 @@ const { regex } = require("../core/asset-extensions");
 const getCSSEntries = require("./helpers/get-webpack-entries");
 const {
   scanProjectDependenciesForClientComponents,
+  scanProjectDependenciesForClientComponentsAsync,
 } = require("../core/scan-dependency-components.js");
 const { useClientRegex } = require("../constants.js");
 
@@ -79,11 +80,19 @@ module.exports = async () => {
   const [cssEntries, , serverFiles] = await getCSSEntries();
 
   const dependencyClientFiles = new Set();
-  scanProjectDependenciesForClientComponents(
-    process.cwd(),
-    dependencyClientFiles,
-    useClientRegex
-  );
+  if (typeof scanProjectDependenciesForClientComponentsAsync === "function") {
+    await scanProjectDependenciesForClientComponentsAsync(
+      process.cwd(),
+      dependencyClientFiles,
+      useClientRegex
+    );
+  } else {
+    scanProjectDependenciesForClientComponents(
+      process.cwd(),
+      dependencyClientFiles,
+      useClientRegex
+    );
+  }
 
   let clientDone = false;
   let serverDone = false;
@@ -112,7 +121,7 @@ module.exports = async () => {
       maxEntrypointSize: 512000,
       maxAssetSize: 512000,
     },
-    cache: false,
+    cache: isDevelopment ? { type: "memory" } : false,
     mode: isDevelopment ? "development" : "production",
     ignoreWarnings: [
       /from "autoprefixer" plugin/,
@@ -165,19 +174,26 @@ module.exports = async () => {
           type: "javascript/auto",
           exclude: [/[\\/]node_modules[\\/](?!dinou)/, ...outputDirs],
           use: [
-            {
-              loader: "babel-loader",
-              options: {
-                presets: [
-                  ["@babel/preset-react", { runtime: "automatic" }],
-                  "@babel/preset-typescript",
-                ],
-                plugins: [
-                  "babel-plugin-react-compiler",
-                  "@babel/plugin-syntax-import-meta",
-                ].filter(Boolean),
-              },
-            },
+            isDevelopment
+              ? {
+                  loader: path.resolve(__dirname, "./loaders/swc-loader.js"),
+                  options: {
+                    isDevelopment: true,
+                  },
+                }
+              : {
+                  loader: "babel-loader",
+                  options: {
+                    presets: [
+                      ["@babel/preset-react", { runtime: "automatic" }],
+                      "@babel/preset-typescript",
+                    ],
+                    plugins: [
+                      "babel-plugin-react-compiler",
+                      "@babel/plugin-syntax-import-meta",
+                    ].filter(Boolean),
+                  },
+                },
             {
               loader: path.resolve(
                 __dirname,
@@ -272,7 +288,8 @@ module.exports = async () => {
           compiler.hooks.thisCompilation.tap(
             "DinouReactServerWatchPlugin",
             (compilation) => {
-              const hooks = webpack.NormalModule.getCompilationHooks(compilation);
+              const NormalModule = compiler.webpack ? compiler.webpack.NormalModule : webpack.NormalModule;
+              const hooks = NormalModule.getCompilationHooks(compilation);
               hooks.needBuild.tap("DinouReactServerWatchPlugin", (module) => {
                 if (
                   module.resource &&

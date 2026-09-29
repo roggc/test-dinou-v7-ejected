@@ -31,13 +31,29 @@ export default function assetsPlugin({ include = regex, changedIds } = {}) {
       build.initialOptions.assetNames = "assets/[name]-[hash]";
 
       // Handle asset loading with different namespaces
-      build.onResolve({ filter: include }, (args) => {
-        const resolvedAlias =
+      build.onResolve({ filter: include }, async (args) => {
+        if (args.pluginData?.inAssetPlugin) return null;
+        let resolvedAlias =
           args.kind === "entry-point"
             ? args.path
             : getAbsPathWithExt(args.path, {
                 parentURL: pathToFileURL(args.importer).href,
               });
+
+        if (!resolvedAlias) {
+          try {
+            const res = await build.resolve(args.path, {
+              resolveDir: args.resolveDir,
+              kind: args.kind,
+              pluginData: { inAssetPlugin: true },
+            });
+            if (res && res.path) {
+              resolvedAlias = res.path;
+            }
+          } catch (e) {}
+        }
+
+        if (!resolvedAlias) return null;
 
         if (args.kind === "entry-point") {
           return {
@@ -52,18 +68,29 @@ export default function assetsPlugin({ include = regex, changedIds } = {}) {
         };
       });
 
+      // Cache asset file buffers in memory
+      const assetCache = new Map();
+
       // Loader for normal assets
       build.onLoad({ filter: /.*/, namespace: "dinou-asset" }, async (args) => {
-        const contents = await fs.readFile(args.path);
-        return { contents, loader: "file" };
+        let contents = assetCache.get(args.path);
+        if (!contents) {
+          contents = await fs.readFile(args.path);
+          assetCache.set(args.path, contents);
+        }
+        return { contents, loader: "file", watchFiles: [args.path] };
       });
 
       // Loader for asset entry points
       build.onLoad(
         { filter: /.*/, namespace: "dinou-asset-entry" },
         async (args) => {
-          const contents = await fs.readFile(args.path);
-          return { contents, loader: "file" };
+          let contents = assetCache.get(args.path);
+          if (!contents) {
+            contents = await fs.readFile(args.path);
+            assetCache.set(args.path, contents);
+          }
+          return { contents, loader: "file", watchFiles: [args.path] };
         }
       );
 

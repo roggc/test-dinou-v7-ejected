@@ -15,7 +15,7 @@ import { useClientRegex, useServerRegex } from "../../constants.js";
 import { updateManifestForModule } from "./update-manifest-for-module.mjs";
 
 function hashFilePath(absPath) {
-  return crypto.createHash("sha1").update(absPath).digest("hex").slice(0, 8);
+  return crypto.createHash("sha1").update(normalizePath(absPath)).digest("hex").slice(0, 8);
 }
 
 export default async function getEsbuildEntries({
@@ -166,7 +166,11 @@ export default async function getEsbuildEntries({
   });
 
   // Gather client modules and update manifest entries
+  let fileScanCount = 0;
   for (const absPath of files) {
+    if (++fileScanCount % 5 === 0) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
     const code = readFileSync(absPath, "utf8");
     const isClientModule = useClientRegex.test(code.trim());
     const isServerFunction = useServerRegex.test(code.trim());
@@ -251,6 +255,14 @@ export default async function getEsbuildEntries({
     const outfileName = `${dCE.name}-${hash}`;
     dCE.outfile = `${outfileName}.js`;
     dCE.outfileName = outfileName;
+    if (manifest) {
+      const fileUrl = pathToFileURL(dCE.absPath).href;
+      for (const key in manifest) {
+        if (key === fileUrl || key.startsWith(fileUrl + "#")) {
+          manifest[key].id = "/" + dCE.outfile;
+        }
+      }
+    }
   }
 
   for (const dCSSE of detectedCSSEntries) {
